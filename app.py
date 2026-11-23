@@ -584,28 +584,45 @@ def teacher_account():
         new_username=request.form.get("username","").strip()
         new_password=request.form.get("new_password","")
         confirm=request.form.get("confirm_password","")
+        org_name=request.form.get("certificate_org_name","").strip()[:100]
+        logo_file=request.files.get("certificate_logo")
+        remove_logo=request.form.get("remove_certificate_logo")=="on"
+        logo_data=t["certificate_logo"] if t else None
         check=hashlib.pbkdf2_hmac("sha256",current.encode(),b"neuron-teacher-v1",180000).hex()
         if not t or not t["password_hash"] or not secrets.compare_digest(check,t["password_hash"]):
             flash("Amaldagi parol noto‘g‘ri.")
         elif not re.fullmatch(r"[A-Za-z0-9_.-]{4,32}",new_username):
-            flash("Login 4–32 belgidan iborat bo‘lsin: lotin harflari, raqam, nuqta, _ yoki -.")
+            flash("Login 4–32 belgidan iborat bo‘lsin.")
         elif new_password and len(new_password)<8:
             flash("Yangi parol kamida 8 belgidan iborat bo‘lishi kerak.")
         elif new_password and new_password!=confirm:
-            flash("Yangi parollar bir-biriga mos kelmadi.")
+            flash("Yangi parollar mos kelmadi.")
         else:
-            with db() as c:
-                duplicate=c.execute("SELECT telegram_id FROM teacher_accounts WHERE username=? AND telegram_id<>?",(new_username,session["teacher_id"])).fetchone()
-                if duplicate:
-                    flash("Bu login band. Boshqa login tanlang.")
-                else:
-                    new_hash=hashlib.pbkdf2_hmac("sha256",new_password.encode(),b"neuron-teacher-v1",180000).hex() if new_password else t["password_hash"]
-                    c.execute("UPDATE teacher_accounts SET username=?,password_hash=? WHERE telegram_id=?",(new_username,new_hash,session["teacher_id"]))
-                    flash("Login va xavfsizlik sozlamalari saqlandi.")
-                    return redirect(url_for("teacher_account"))
+            try:
+                if remove_logo: logo_data=None
+                if logo_file and logo_file.filename:
+                    from PIL import Image
+                    raw=logo_file.read()
+                    if len(raw)>2*1024*1024: raise ValueError("Logotip 2 MB dan kichik bo‘lsin.")
+                    check_img=Image.open(io.BytesIO(raw)); check_img.verify()
+                    if check_img.format not in ("PNG","JPEG","WEBP"): raise ValueError("Faqat PNG, JPG yoki WEBP qabul qilinadi.")
+                    import base64
+                    logo_data=base64.b64encode(raw).decode("ascii")
+                with db() as c:
+                    duplicate=c.execute("SELECT telegram_id FROM teacher_accounts WHERE username=? AND telegram_id<>?",(new_username,session["teacher_id"])).fetchone()
+                    if duplicate:
+                        flash("Bu login band. Boshqa login tanlang.")
+                    else:
+                        new_hash=hashlib.pbkdf2_hmac("sha256",new_password.encode(),b"neuron-teacher-v1",180000).hex() if new_password else t["password_hash"]
+                        c.execute("UPDATE teacher_accounts SET username=?,password_hash=?,certificate_org_name=?,certificate_logo=? WHERE telegram_id=?",(new_username,new_hash,org_name,logo_data,session["teacher_id"]))
+                        flash("Hisob va sertifikat sozlamalari saqlandi.")
+                        return redirect(url_for("teacher_account"))
+            except Exception as e:
+                flash(str(e) if isinstance(e,ValueError) else "Logotip faylini o‘qib bo‘lmadi.")
     with db() as c:
         t=c.execute("SELECT * FROM teacher_accounts WHERE telegram_id=?",(session["teacher_id"],)).fetchone()
-    return page("Kabinet sozlamalari", """<section class="card"><p class="eyebrow">NEURON TEACHER</p><h1>🔐 Login va parol sozlamalari</h1><p class="muted">Loginni almashtirish majburiy. Parolni o‘zgartirmasangiz, eski parol saqlanadi. O‘zgarishlarni tasdiqlash uchun amaldagi parolingizni kiriting.</p><form method="post"><label>Yangi login</label><input name="username" value="{{t['username'] or ''}}" minlength="4" maxlength="32" pattern="[A-Za-z0-9_.-]+" required autocomplete="username"><label>Yangi parol (ixtiyoriy)</label><input name="new_password" type="password" minlength="8" autocomplete="new-password" placeholder="O‘zgartirmasangiz bo‘sh qoldiring"><label>Yangi parolni takrorlang</label><input name="confirm_password" type="password" autocomplete="new-password"><label>Amaldagi parol</label><input name="current_password" type="password" required autocomplete="current-password"><button class="full">💾 O‘zgarishlarni saqlash</button></form><a class="btn secondary full" href="/teacher/cabinet">← Kabinetga qaytish</a></section>""",t=t)
+    return page("Kabinet sozlamalari", """<section class="card"><p class="eyebrow">NEURON TEACHER</p><h1>🔐 Hisob va sertifikat sozlamalari</h1><form method="post" enctype="multipart/form-data"><label>Yangi login</label><input name="username" value="{{t['username'] or ''}}" minlength="4" maxlength="32" pattern="[A-Za-z0-9_.-]+" required><label>Yangi parol (ixtiyoriy)</label><input name="new_password" type="password" minlength="8"><label>Yangi parolni takrorlang</label><input name="confirm_password" type="password"><hr><h2>🏅 Sertifikat ko‘rinishi</h2><p class="muted">Bu nom sertifikatda logotip ostida chiqadi. O‘zingizning ismingiz yoki o‘quv markazingiz nomini yozing.</p><label>Sertifikatda ko‘rinadigan nom</label><input name="certificate_org_name" value="{{t['certificate_org_name'] or t['full_name']}}" maxlength="100" placeholder="Masalan: NEURON o‘quv markazi"><label>Logotip (PNG, JPG yoki WEBP, 2 MB gacha)</label><input type="file" name="certificate_logo" accept="image/png,image/jpeg,image/webp"><label><input type="checkbox" name="remove_certificate_logo" style="width:auto;min-height:auto"> Saqlangan logotipni olib tashlash</label><p class="muted">Logotipni bir marta yuklaysiz, keyingi sertifikatlarda avtomatik ishlatiladi.</p><hr><label>Amaldagi parol — o‘zgarishlarni tasdiqlash uchun</label><input name="current_password" type="password" required><button class="full">💾 O‘zgarishlarni saqlash</button></form><a class="btn secondary full" href="/teacher/cabinet">← Kabinetga qaytish</a></section>""",t=t)
+
 
 @app.get("/teacher/register")
 def teacher_register_page():
