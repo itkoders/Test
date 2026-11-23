@@ -64,7 +64,10 @@ def init_db():
                     created_at TEXT NOT NULL, file_name TEXT, file_data BYTEA, answer_key TEXT,
                     question_count INTEGER NOT NULL DEFAULT 0, manual_answers TEXT,
                     review_status TEXT NOT NULL DEFAULT 'checked', focus_warning INTEGER NOT NULL DEFAULT 0,
-                    manual_score DOUBLE PRECISION NOT NULL DEFAULT 0)""")
+                    manual_score DOUBLE PRECISION NOT NULL DEFAULT 0, teacher_id TEXT, subject TEXT NOT NULL DEFAULT '', grade TEXT NOT NULL DEFAULT '')""")
+                cur.execute("ALTER TABLE tests ADD COLUMN IF NOT EXISTS teacher_id TEXT")
+                cur.execute("ALTER TABLE tests ADD COLUMN IF NOT EXISTS subject TEXT NOT NULL DEFAULT ''")
+                cur.execute("ALTER TABLE tests ADD COLUMN IF NOT EXISTS grade TEXT NOT NULL DEFAULT ''")
                 cur.execute("""CREATE TABLE IF NOT EXISTS results(
                     id BIGSERIAL PRIMARY KEY, test_id BIGINT NOT NULL, full_name TEXT NOT NULL,
                     student_id TEXT NOT NULL DEFAULT '', score DOUBLE PRECISION NOT NULL,
@@ -84,14 +87,14 @@ def init_db():
         c.execute("""CREATE TABLE IF NOT EXISTS tests(
             id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
             code TEXT UNIQUE NOT NULL, duration INTEGER NOT NULL DEFAULT 30,
-            questions TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)""")
+            questions TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, teacher_id TEXT, subject TEXT NOT NULL DEFAULT '', grade TEXT NOT NULL DEFAULT '')""")
         c.execute("""CREATE TABLE IF NOT EXISTS results(
             id INTEGER PRIMARY KEY AUTOINCREMENT, test_id INTEGER NOT NULL,
             full_name TEXT NOT NULL, student_id TEXT NOT NULL DEFAULT '',
             score INTEGER NOT NULL, total INTEGER NOT NULL, percent INTEGER NOT NULL,
             cert_id TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL)""")
         cols = {r["name"] for r in c.execute("PRAGMA table_info(tests)").fetchall()}
-        for name, typ in [("file_name","TEXT"),("file_data","BLOB"),("answer_key","TEXT"),("question_count","INTEGER NOT NULL DEFAULT 0"),("manual_answers","TEXT"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0")]:
+        for name, typ in [("file_name","TEXT"),("file_data","BLOB"),("answer_key","TEXT"),("question_count","INTEGER NOT NULL DEFAULT 0"),("manual_answers","TEXT"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0"),("teacher_id","TEXT"),("subject","TEXT NOT NULL DEFAULT ''"),("grade","TEXT NOT NULL DEFAULT ''")]:
             if name not in cols: c.execute(f"ALTER TABLE tests ADD COLUMN {name} {typ}")
         result_cols = {r["name"] for r in c.execute("PRAGMA table_info(results)").fetchall()}
         for name, typ in [("manual_answers","TEXT NOT NULL DEFAULT '[]'"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0")]:
@@ -144,9 +147,9 @@ def get_test(test_id):
 def home():
     return page("Bosh sahifa", """
     <section class="card"><p class="eyebrow">NEURON EDUCATION</p><h1>Bilimingizni sinab ko‘ring.</h1>
-    <p class="muted">Test kodini kiriting, savollar faylini ko‘ring va javoblarni Mini App ichida belgilang.</p>
+    <p class="muted">Fan va sinfga mos test kodini kiriting. Savollarni ketma-ket ishlang, javoblaringizni tekshirib yakunlang.</p>
     <form method="post" action="/start"><label>Ism va familiya</label><input name="full_name" required maxlength="100" placeholder="Masalan: Ali Valiyev">
-    <label>Test kodi</label><input name="code" required maxlength="30" placeholder="O‘qituvchi bergan kod"><button class="full">Testni boshlash →</button></form>
+    <label>Test kodi</label><input name="code" required maxlength="40" placeholder="Masalan: TARIX-8-AB-4F2A"><button class="full">Testni boshlash →</button></form>
     <div class="grid"><a class="btn secondary full" href="/teacher/login">👩‍🏫 O‘qituvchi kabineti</a><a class="btn dark full" href="/admin">🔐 Admin paneli</a></div></section>
     """)
 
@@ -171,7 +174,7 @@ def take_test(test_id):
     if count<1: count=len([x for x in (test["questions"] or "").splitlines() if x.strip()])
     return page("Test ishlash", """
     <div class="grid"><section class="card"><p class="eyebrow">TEST TOPSHIRISH</p><h1>{{test['title']}}</h1>
-    <p class="muted">{{candidate['name']}} · {{count}} ta savol</p><div class="timer">⏱ Qolgan vaqt: <span id="clock">{{test['duration']}}:00</span></div>
+    <p class="muted">{{candidate['name']}} · {{test['subject'] or 'Fan ko‘rsatilmagan'}} · {{test['grade'] or 'Sinf ko‘rsatilmagan'}} · {{count}} ta savol</p><div class="timer">⏱ Qolgan vaqt: <span id="clock">{{test['duration']}}:00</span></div>
     <p class="muted">Savollarni hujjatdan o‘qing. Javoblarni o‘ng/ pastdagi bo‘limda belgilang.</p>
     {% if test['file_name'] %}<div class="filebox"><b>📄 Test savollari</b><p class="muted">Savollar alohida brauzer oynasida ochiladi. Javoblarni belgilash uchun test oynasiga qayting.</p><a id="testFileLink" class="btn secondary full" href="{{file_url}}" target="_blank" rel="noopener noreferrer">📖 Savollarni yangi oynada ochish</a></div>{% else %}<div class="notice">Test savollari fayli biriktirilmagan.</div>{% endif %}
     </section><section class="card"><h2>Javoblar varaqasi</h2><p class="muted">Har bir savol uchun variantni bosing. Yopiq savollarga yozma javob kiriting.</p><form id="answerForm" method="post" action="/submit/{{test['id']}}">
@@ -479,14 +482,46 @@ def teacher_register_page():
 def teacher_cabinet():
     with db() as c:
         t=c.execute("SELECT * FROM teacher_accounts WHERE telegram_id=?",(session["teacher_id"],)).fetchone()
-        rows=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id WHERE lower(tests.title) LIKE lower(?) ORDER BY results.id DESC LIMIT 100", ("%"+t["subject"]+"%",)).fetchall()
-    return page("O‘qituvchi kabineti", """<section class="card"><p class="eyebrow">NEURON TEACHER CABINET</p><h1>Assalomu alaykum, {{t['full_name']}}</h1><p class="muted">{{t['subject']}} · {{t['phone']}}</p><div class="grid"><div class="stat"><b>{{rows|length}}</b>Natijalar</div><div class="stat"><b>{{rows|selectattr('review_status','equalto','pending')|list|length}}</b>Tekshiruv kutilmoqda</div></div><h2>O‘quvchilar natijalari</h2>{% for r in rows %}<div class="question"><b>{{r['full_name']}}</b> — {{r['title']}}<p class="muted">{{r['score']}}/{{r['total']}} · {{r['percent']}}% · {{r['created_at']}}</p>{% if r['review_status']=='pending' %}<a class="btn secondary" href="/teacher/review/{{r['id']}}">Yopiq savollarni tekshirish</a>{% endif %}<a class="btn" href="/certificate/{{r['cert_id']}}">Sertifikat / natija</a></div>{% else %}<p>Hozircha natija yo‘q.</p>{% endfor %}<a class="btn dark" href="/teacher/logout">Chiqish</a></section>""",t=t,rows=rows)
+        rows=c.execute("SELECT results.*,tests.title,tests.code,tests.subject,tests.grade FROM results JOIN tests ON tests.id=results.test_id WHERE tests.teacher_id=? ORDER BY results.id DESC LIMIT 100", (session["teacher_id"],)).fetchall()
+        tests=c.execute("SELECT * FROM tests WHERE teacher_id=? ORDER BY id DESC LIMIT 100",(session["teacher_id"],)).fetchall()
+    return page("O‘qituvchi kabineti", """<section class="card"><p class="eyebrow">NEURON TEACHER CABINET</p><h1>Assalomu alaykum, {{t['full_name']}}</h1><p class="muted">{{t['subject']}} · {{t['phone']}}</p><div class="grid"><div class="stat"><b>{{tests|length}}</b>Yaratilgan testlar</div><div class="stat"><b>{{rows|length}}</b>O‘quvchi natijalari</div><div class="stat"><b>{{rows|selectattr('review_status','equalto','pending')|list|length}}</b>Tekshiruv kutilmoqda</div></div><h2>＋ Yangi test yaratish</h2><form method="post" action="/teacher/create" enctype="multipart/form-data"><label>Fan nomi</label><input name="subject" value="{{t['subject']}}" required placeholder="Masalan: Tarix"><label>Sinf / kurs</label><input name="grade" required placeholder="Masalan: 8-sinf"><label>Test nomi</label><input name="title" required placeholder="Masalan: 1-mavzu nazorati"><div class="grid"><div><label>Davomiyligi (daqiqada)</label><input name="duration" type="number" min="1" max="240" value="30" required></div><div><label>Savollar soni</label><input name="question_count" type="number" min="1" max="100" value="10" required></div></div><label>Savollar fayli (PDF yoki DOCX)</label><input type="file" name="test_file" accept=".pdf,.docx" required><h3>EvalBee uslubida javoblar kaliti</h3><p class="muted">Har savolda A/B/C/D, To‘g‘ri/Noto‘g‘ri, qisqa javob yoki o‘qituvchi tekshiradigan yozma javobni tanlang.</p><div id="teacherKeyRows"></div><input type="hidden" name="answer_key" id="teacherAnswerKey" required><p id="teacherKeyProgress" class="muted">0 ta javob</p><button class="full">🚀 Testni yaratish</button></form><h2>Mening testlarim</h2>{% for x in tests %}<div class="question"><b>{{x['title']}}</b><p class="muted">{{x['subject']}} · {{x['grade']}} · Kod: <b>{{x['code']}}</b> · {{x['question_count']}} savol</p><button type="button" class="secondary" onclick="navigator.clipboard.writeText('{{x['code']}}')">Kodni nusxalash</button></div>{% else %}<p class="muted">Hali test yaratmagansiz.</p>{% endfor %}<h2>O‘quvchilar natijalari</h2>{% for r in rows %}<div class="question"><b>{{r['full_name']}}</b> — {{r['title']}}<p class="muted">{{r['score']}}/{{r['total']}} · {{r['percent']}}% · {{r['created_at']}}</p>{% if r['review_status']=='pending' %}<a class="btn secondary" href="/teacher/review/{{r['id']}}">Yopiq savollarni tekshirish</a>{% endif %}<a class="btn" href="/certificate/{{r['cert_id']}}">Sertifikat / natija</a></div>{% else %}<p>Hozircha natija yo‘q.</p>{% endfor %}<a class="btn dark" href="/teacher/logout">Chiqish</a></section>""",t=t,rows=rows,tests=tests)
+
+@app.post("/teacher/create")
+@teacher_required
+def teacher_create_test():
+    subject=request.form.get("subject","").strip()[:60]
+    grade=request.form.get("grade","").strip()[:30]
+    title=request.form.get("title","").strip()[:120]
+    try: duration=max(1,min(240,int(request.form.get("duration",30)))); count=int(request.form.get("question_count",0))
+    except Exception: flash("Davomiylik yoki savollar soni noto‘g‘ri."); return redirect(url_for("teacher_cabinet"))
+    raw=request.form.get("answer_key","").strip(); uploaded=request.files.get("test_file")
+    if not subject or not grade or not title or count<1 or count>100 or not uploaded or not uploaded.filename:
+        flash("Fan, sinf, test nomi, savollar soni va faylni to‘ldiring."); return redirect(url_for("teacher_cabinet"))
+    filename=secure_filename(uploaded.filename); ext=filename.rsplit(".",1)[-1].lower() if "." in filename else ""
+    data=uploaded.read()
+    if ext not in ("pdf","docx") or not data or len(data)>15*1024*1024:
+        flash("Faqat 15 MB gacha PDF yoki DOCX fayl yuklang."); return redirect(url_for("teacher_cabinet"))
+    answers=[x.strip() for x in raw.replace("\\n",",").replace(";",",").split(",") if x.strip()]
+    if len(answers)!=count:
+        flash(f"{count} ta savol uchun {count} ta javob kalitini belgilang."); return redirect(url_for("teacher_cabinet"))
+    prefix="".join(ch for ch in subject.upper() if ch.isalnum())[:5] or "FAN"
+    gradecode="".join(ch for ch in grade.upper() if ch.isalnum())[:4] or "SIN"
+    initials="".join(x[0] for x in tname.split()[:2]).upper() if (tname:=get_teacher_name(session["teacher_id"])) else "UST"
+    code=prefix+"-"+gradecode+"-"+initials+"-"+secrets.token_hex(2).upper()
+    with db() as c:
+        c.execute("INSERT INTO tests(title,code,duration,questions,created_at,file_name,file_data,answer_key,question_count,teacher_id,subject,grade) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(title,code,duration,"",datetime.utcnow().isoformat(),filename,data,json.dumps(answers,ensure_ascii=False),count,session["teacher_id"],subject,grade))
+    flash("Test yaratildi! O‘quvchilarga fan va sinfga mos kodni bering: "+code)
+    return redirect(url_for("teacher_cabinet"))
+
+def get_teacher_name(teacher_id):
+    with db() as c: row=c.execute("SELECT full_name FROM teacher_accounts WHERE telegram_id=?",(teacher_id,)).fetchone()
+    return row["full_name"] if row else ""
 
 @app.route("/teacher/review/<int:result_id>",methods=["GET","POST"])
 @teacher_required
 def teacher_review(result_id):
     with db() as c:
-        r=c.execute("SELECT results.* FROM results JOIN tests ON tests.id=results.test_id WHERE results.id=? AND lower(tests.title) LIKE lower(?)",(result_id,"%"+c.execute("SELECT subject FROM teacher_accounts WHERE telegram_id=?",(session["teacher_id"],)).fetchone()["subject"]+"%")).fetchone()
+        r=c.execute("SELECT results.* FROM results JOIN tests ON tests.id=results.test_id WHERE results.id=? AND tests.teacher_id=?",(result_id,session["teacher_id"])).fetchone()
         if not r: abort(404)
         try: items=json.loads(r["manual_answers"] or "[]")
         except Exception: items=[]
