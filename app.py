@@ -86,6 +86,8 @@ def init_db():
                     created_at TEXT NOT NULL, username TEXT UNIQUE, password_hash TEXT)""")
                 cur.execute("""CREATE TABLE IF NOT EXISTS blocked_students(test_id BIGINT NOT NULL,full_name TEXT NOT NULL,full_name_key TEXT NOT NULL,reason TEXT NOT NULL DEFAULT 'Ogohlantirish',created_at TEXT NOT NULL,PRIMARY KEY(test_id,full_name_key))""")
                 cur.execute("ALTER TABLE results ADD COLUMN IF NOT EXISTS certificate_approved BOOLEAN NOT NULL DEFAULT FALSE")
+                cur.execute("ALTER TABLE teacher_accounts ADD COLUMN IF NOT EXISTS certificate_org_name TEXT NOT NULL DEFAULT ''")
+                cur.execute("ALTER TABLE teacher_accounts ADD COLUMN IF NOT EXISTS certificate_logo TEXT")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_neuron_test_results_test ON results(test_id)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_neuron_test_teachers_status ON teacher_accounts(status)")
         return
@@ -108,7 +110,7 @@ def init_db():
         c.execute("""CREATE TABLE IF NOT EXISTS blocked_students(test_id INTEGER NOT NULL,full_name TEXT NOT NULL,full_name_key TEXT NOT NULL,reason TEXT NOT NULL DEFAULT 'Ogohlantirish',created_at TEXT NOT NULL,PRIMARY KEY(test_id,full_name_key))""")
         c.execute("""CREATE TABLE IF NOT EXISTS teacher_accounts(telegram_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, full_name TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', stage TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, username TEXT, password_hash TEXT)""")
         tc={r["name"] for r in c.execute("PRAGMA table_info(teacher_accounts)").fetchall()}
-        for n,t in [("username","TEXT"),("password_hash","TEXT")]:
+        for n,t in [("username","TEXT"),("password_hash","TEXT"),("certificate_org_name","TEXT NOT NULL DEFAULT ''"),("certificate_logo","TEXT")]:
             if n not in tc: c.execute(f"ALTER TABLE teacher_accounts ADD COLUMN {n} {t}")
 
 BASE = """
