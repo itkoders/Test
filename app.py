@@ -392,14 +392,17 @@ def telegram_api(method,payload):
 
 TEACHER_CHAT_ID=os.environ.get("TEACHER_CHAT_ID","").strip()
 def notify_teacher(message):
-    if not BOT_TOKEN or not TEACHER_CHAT_ID:
-        app.logger.error("Teacher alert not configured: BOT_TOKEN or TEACHER_CHAT_ID missing")
-        return False
-    result=telegram_api("sendMessage",{"chat_id":TEACHER_CHAT_ID,"text":message,"reply_markup":{"inline_keyboard":[[{"text":"📋 O‘qituvchi paneli","url":"https://mirzayev-group.onrender.com/admin"}]]}})
-    if not result or not result.get("ok"):
-        app.logger.error("Teacher Telegram notification failed: %s",result)
-        return False
-    return True
+    if not BOT_TOKEN: return False
+    with db() as c:
+        chats=[r["chat_id"] for r in c.execute("SELECT chat_id FROM teacher_accounts WHERE status='approved'").fetchall()]
+    if TEACHER_CHAT_ID and TEACHER_CHAT_ID not in chats: chats.append(TEACHER_CHAT_ID)
+    sent=0
+    for chat_id in chats:
+        try:
+            result=telegram_api("sendMessage",{"chat_id":chat_id,"text":message,"reply_markup":{"inline_keyboard":[[{"text":"📋 O‘qituvchi paneli","url":"https://mirzayev-group.onrender.com/admin"}]]}})
+            if result and result.get("ok"): sent+=1
+        except Exception: app.logger.exception("Teacher Telegram notification failed")
+    return sent>0
 
 @app.post("/telegram/webhook")
 def telegram_webhook():
