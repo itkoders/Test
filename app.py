@@ -178,9 +178,10 @@ def take_test(test_id):
     if not candidate or candidate["test_id"]!=test_id or not test: return redirect(url_for("home"))
     count=int(test["question_count"] or 0)
     if count<1: count=len([x for x in (test["questions"] or "").splitlines() if x.strip()])
+    remaining=max(0,int(session.get("test_deadline",datetime.utcnow().timestamp())-datetime.utcnow().timestamp()))
     return page("Test ishlash", """
     <div class="grid"><section class="card"><p class="eyebrow">TEST TOPSHIRISH</p><h1>{{test['title']}}</h1>
-    <p class="muted">{{candidate['name']}} · {{test['subject'] or 'Fan ko‘rsatilmagan'}} · {{test['grade'] or 'Sinf ko‘rsatilmagan'}} · {{count}} ta savol</p><div class="timer">⏱ Qolgan vaqt: <span id="clock">{{test['duration']}}:00</span></div>
+    <p class="muted">{{candidate['name']}} · {{test['subject'] or 'Fan ko‘rsatilmagan'}} · {{test['grade'] or 'Sinf ko‘rsatilmagan'}} · {{count}} ta savol</p><div class="timer">⏱ Qolgan vaqt: <span id="clock">{{remaining//60}}:{{"%02d"|format(remaining%60)}}</span></div><p id="focusNotice" class="notice" hidden></p>
     <p class="muted">Savollarni hujjatdan o‘qing. Javoblarni o‘ng/ pastdagi bo‘limda belgilang.</p>
     {% if test['file_name'] %}<div class="filebox"><b>📄 Test savollari</b><p class="muted">Savollar alohida brauzer oynasida ochiladi. Javoblarni belgilash uchun test oynasiga qayting.</p><a id="testFileLink" class="btn secondary full" href="{{file_url}}" target="_blank" rel="noopener noreferrer">📖 Savollarni yangi oynada ochish</a></div>{% else %}<div class="notice">Test savollari fayli biriktirilmagan.</div>{% endif %}
     </section><section class="card"><h2>Javoblar varaqasi</h2><p class="muted">Har bir savol uchun variantni bosing. Yopiq savollarga yozma javob kiriting.</p><form id="answerForm" method="post" action="/submit/{{test['id']}}">
@@ -245,7 +246,7 @@ def submit_test(test_id):
         result_id=cur.fetchone()["id"]
     try: notify_teacher("🧪 NEURON — Yangi test\\nO‘quvchi: "+candidate["name"]+"\\nTest: "+test["title"]+"\\nNatija: "+str(score)+"/"+str(total)+" ("+str(percent)+"%)\\nYopiq savollar: "+str(len(manual))+"\\nOgohlantirishlar: "+str(warnings)+"\\nID: "+str(result_id))
     except Exception: app.logger.exception("Teacher notification failed")
-    session.pop("candidate",None); session.pop("started_at",None)
+    session.pop("candidate",None); session.pop("started_at",None); session.pop("test_deadline",None)
     return redirect(url_for("certificate", cert_id=cert))
 
 @app.get("/certificate/<cert_id>")
