@@ -215,9 +215,9 @@ button:disabled{opacity:.4;cursor:not-allowed;transform:none}
 .feature-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:16px 0}
 .feature{margin:0;padding:18px}
 .feature b{display:block;font-size:16px;margin-bottom:4px}
-.app-dock{position:fixed;z-index:50;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));max-width:560px;margin:0 auto;display:flex;gap:6px;justify-content:space-around;padding:8px;border:1px solid var(--line);border-radius:26px;background:rgba(12,22,40,.86);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);box-shadow:0 20px 50px -20px rgba(0,0,0,.6);overflow-x:auto;scrollbar-width:none}
+.app-dock{position:fixed;z-index:50;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));max-width:560px;margin:0 auto;display:flex;flex-wrap:wrap;gap:6px;justify-content:space-around;padding:8px;border:1px solid var(--line);border-radius:26px;background:rgba(12,22,40,.9);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);box-shadow:0 20px 50px -20px rgba(0,0,0,.6);overflow:visible}
 .app-dock::-webkit-scrollbar{display:none}
-.app-dock a,.app-dock button{flex:1 0 62px;min-width:58px;min-height:58px;padding:6px 4px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border:0;border-radius:18px;background:transparent;color:#8ea3c2;font-size:10px;font-weight:750;text-decoration:none;white-space:nowrap;box-shadow:none}
+.app-dock a,.app-dock button{flex:1 1 calc(33.333% - 8px);min-width:0;min-height:54px;padding:6px 4px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border:0;border-radius:18px;background:transparent;color:#8ea3c2;font-size:10px;font-weight:750;text-decoration:none;white-space:nowrap;box-shadow:none}
 .app-dock .active,.app-dock button.active{background:var(--soft);color:var(--cyan)}
 .app-dock .ico{font-size:19px;line-height:1.2}
 .app-dock a:hover,.app-dock button:hover{filter:none;transform:none}
@@ -231,7 +231,7 @@ footer{display:none}
 <header><a class="back-button" href="{{back_url}}" onclick="if(history.length>1){history.back();return false}" aria-label="Orqaga qaytish">‹</a><div class="brand">NEURON<span>.</span><small>SMART TEST PLATFORM</small></div><button class="theme-button" id="themeToggle" type="button" aria-label="Mavzuni almashtirish">◐</button></header>
 <main>{% with messages=get_flashed_messages() %}{% for m in messages %}<div class="notice">{{m}}</div>{% endfor %}{% endwith %}{{ content|safe }}</main>
 {% if session.get('teacher_id') %}<nav class="app-dock" aria-label="O‘qituvchi menyusi">
-{% if request.path=='/teacher/cabinet' %}<button data-panel-target="create"><span class="ico">＋</span>Yaratish</button><button data-panel-target="tests"><span class="ico">📚</span>Testlar</button><button data-panel-target="results"><span class="ico">📊</span>Natija</button><button data-panel-target="warnings"><span class="ico">⚠️</span>Ogohlantirish</button><button data-panel-target="certificates"><span class="ico">🏅</span>Sertifikat</button>
+{% if request.path=='/teacher/cabinet' %}<button data-panel-target="create"><span class="ico">＋</span>Yaratish</button><button data-panel-target="tests"><span class="ico">📚</span>Testlar</button><button data-panel-target="results"><span class="ico">📊</span>Natija</button><button data-panel-target="warnings"><span class="ico">⚠️</span>Ogohlantirish</button><button data-panel-target="certificates"><span class="ico">🏅</span>Sertifikat</button><a href="/teacher/account"><span class="ico">⚙️</span>Sozlamalar</a>
 {% else %}<a href="/teacher/cabinet"><span class="ico">⌂</span>Kabinet</a><a href="/teacher/account"><span class="ico">⚙️</span>Sozlamalar</a><a href="/teacher/logout"><span class="ico">↪</span>Chiqish</a>{% endif %}
 </nav>{% elif session.get('admin') %}<nav class="app-dock" aria-label="Admin menyusi">
 {% if request.path=='/admin/dashboard' %}<button data-admin-target="overview"><span class="ico">⌂</span>Umumiy</button><button data-admin-target="adminTests"><span class="ico">📚</span>Testlar</button><button data-admin-target="adminResults"><span class="ico">📊</span>Natijalar</button><button data-admin-target="adminWarnings"><span class="ico">⚠️</span>Ogohlantirish</button><a href="/admin/teachers"><span class="ico">👩‍🏫</span>Ustozlar</a><a href="/admin/logout"><span class="ico">↪</span>Chiqish</a>
@@ -720,12 +720,12 @@ def teacher_create_test():
     gradecode="".join(ch for ch in grade.upper() if ch.isalnum())[:4] or "SIN"
     initials="".join(x[0] for x in tname.split()[:2]).upper() if (tname:=get_teacher_name(session["teacher_id"])) else "UST"
     code=prefix+"-"+gradecode+"-"+initials+"-"+secrets.token_hex(2).upper()
-    with db() as c:
-        cert_mode=request.form.get("certificate_mode","manual")
+    cert_mode=request.form.get("certificate_mode","manual")
     if cert_mode not in ("manual","threshold"): cert_mode="manual"
     try: cert_min=max(0.0,min(float(count),float(request.form.get("certificate_min_score","0"))))
     except Exception: cert_min=0.0
-    c.execute("INSERT INTO tests(title,code,duration,questions,created_at,file_name,file_data,answer_key,question_count,teacher_id,subject,grade,certificate_mode,certificate_min_score) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(title,code,duration,"",datetime.utcnow().isoformat(),filename,data,json.dumps(answers,ensure_ascii=False),count,session["teacher_id"],subject,grade,cert_mode,cert_min))
+    with db() as c:
+        c.execute("INSERT INTO tests(title,code,duration,questions,created_at,file_name,file_data,answer_key,question_count,teacher_id,subject,grade,certificate_mode,certificate_min_score) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(title,code,duration,"",datetime.utcnow().isoformat(),filename,data,json.dumps(answers,ensure_ascii=False),count,session["teacher_id"],subject,grade,cert_mode,cert_min))
     flash("Test yaratildi! O‘quvchilarga fan va sinfga mos kodni bering: "+code)
     return redirect(url_for("teacher_cabinet"))
 
