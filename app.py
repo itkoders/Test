@@ -3,9 +3,11 @@ from datetime import datetime
 from functools import wraps
 from flask import Flask, request, redirect, url_for, session, flash, render_template_string, abort, send_file, Response
 from werkzeug.utils import secure_filename
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-this-before-production")
+file_signer = URLSafeTimedSerializer(app.secret_key, salt="neuron-test-file-v1")
 app.config["MAX_CONTENT_LENGTH"] = 18 * 1024 * 1024
 DB = os.environ.get("DATABASE_PATH", "mirzayev_group.db")
 ADMIN_USER = os.environ.get("ADMIN_USERNAME", "admin")
@@ -109,20 +111,24 @@ def take_test(test_id):
     <div class="grid"><section class="card"><p class="eyebrow">TEST TOPSHIRISH</p><h1>{{test['title']}}</h1>
     <p class="muted">{{candidate['name']}} · {{count}} ta savol</p><div class="timer">⏱ Qolgan vaqt: <span id="clock">{{test['duration']}}:00</span></div>
     <p class="muted">Savollarni hujjatdan o‘qing. Javoblarni o‘ng/ pastdagi bo‘limda belgilang.</p>
-    {% if test['file_name'] %}<div class="filebox"><b>📄 Test savollari</b><p class="muted">Savollar shu yerda ko‘rinadi. Hujjatni alohida oynada ochish shart emas.</p><iframe title="Test savollari" src="/testfile/{{test['id']}}" loading="eager"></iframe></div>{% else %}<div class="notice">Test savollari fayli biriktirilmagan.</div>{% endif %}
+    {% if test['file_name'] %}<div class="filebox"><b>📄 Test savollari</b><p class="muted">Savollar alohida brauzer oynasida ochiladi. Javoblarni belgilash uchun test oynasiga qayting.</p><a id="testFileLink" class="btn secondary full" href="{{file_url}}" target="_blank" rel="noopener noreferrer">📖 Savollarni yangi oynada ochish</a></div>{% else %}<div class="notice">Test savollari fayli biriktirilmagan.</div>{% endif %}
     </section><section class="card"><h2>Javoblar varaqasi</h2><p class="muted">Har bir savol uchun variantni bosing. Yopiq savollarga yozma javob kiriting.</p><form id="answerForm" method="post" action="/submit/{{test['id']}}">
     {% for i in range(1,count+1) %}<div class="question"><div class="answer-row"><div class="qnum">{{i}}</div><div><b>{{i}}-savol</b><div class="bubbles">
     {% for v in ['A','B','C','D'] %}<label class="bubble"><input type="radio" name="q{{i}}" value="{{v}}"><span>{{v}}</span></label>{% endfor %}
     </div><input name="q{{i}}_text" placeholder="Yopiq savol: javobni shu yerga yozing" aria-label="{{i}}-savol yozma javobi"></div></div></div>{% endfor %}
     <button class="full" type="submit">Testni yakunlash ✓</button></form></section></section></div>
-    <script>let left={{test['duration']}}*60;const el=document.getElementById('clock');const form=document.getElementById('answerForm');function tick(){let m=Math.floor(left/60),s=left%60;el.textContent=m+':'+String(s).padStart(2,'0');if(left<=0){form.submit();return;}left--;}let focusWarning=false;let openingTestFile=false;const fileLink=document.getElementById("testFileLink");if(fileLink){fileLink.addEventListener("click",()=>{openingTestFile=true;});}document.addEventListener("visibilitychange",()=>{if(document.hidden){if(openingTestFile){return;}focusWarning=true;alert("Diqqat: test oynasidan chiqdingiz. Bu holat o‘qituvchiga qayd etiladi.");}else if(openingTestFile){openingTestFile=false;}});form.addEventListener("submit",function(){if(focusWarning){const h=document.createElement("input");h.type="hidden";h.name="focus_warning";h.value="1";form.appendChild(h);}});tick();setInterval(tick,1000);</script>
-    """,test=test,candidate=candidate,count=count)
+    <script>let left={{test['duration']}}*60;const el=document.getElementById('clock');const form=document.getElementById('answerForm');function tick(){let m=Math.floor(left/60),s=left%60;el.textContent=m+':'+String(s).padStart(2,'0');if(left<=0){form.submit();return;}left--;}let focusWarning=false;let openingTestFile=false;const fileLink=document.getElementById("testFileLink");if(fileLink){fileLink.addEventListener("click",()=>{openingTestFile=true;setTimeout(()=>{openingTestFile=false;},15000);});}document.addEventListener("visibilitychange",()=>{if(document.hidden){if(openingTestFile){return;}focusWarning=true;alert("Diqqat: test oynasidan chiqdingiz. Bu holat o‘qituvchiga qayd etiladi.");}else{openingTestFile=false;}});form.addEventListener("submit",function(){if(focusWarning){const h=document.createElement("input");h.type="hidden";h.name="focus_warning";h.value="1";form.appendChild(h);}});tick();setInterval(tick,1000);</script>
+    """,test=test,candidate=candidate,count=count,file_url=url_for("test_file",test_id=test_id,token=file_signer.dumps({"test_id":test_id,"name":candidate["name"]})))
 
-@app.get("/testfile/<int:test_id>")
-def test_file(test_id):
+@app.get("/testfile/<int:test_id>/<token>")
+def test_file(test_id,token):
+    try:
+        payload=file_signer.loads(token,max_age=4*60*60)
+        if int(payload.get("test_id",-1))!=test_id: abort(404)
+    except (BadSignature,SignatureExpired,ValueError,TypeError):
+        abort(404)
     test=get_test(test_id)
-    candidate=session.get("candidate")
-    if not test or not candidate or candidate["test_id"]!=test_id or not test["file_data"]: abort(404)
+    if not test or not test["file_data"]: abort(404)
     name=test["file_name"] or "test"
     if name.lower().endswith(".pdf"):
         return send_file(io.BytesIO(test["file_data"]), mimetype="application/pdf", download_name=name, as_attachment=False)
@@ -172,8 +178,35 @@ def certificate(cert_id):
     return page("Natija va sertifikat", """
     <section class="card" style="text-align:center"><p class="eyebrow">NEURON NATIJA</p><h1>{{r['full_name']}}</h1><p class="muted">{{r['title']}}</p>
     <div class="stat"><b>{{r['score']}} / {{r['total']}}</b>{{r['percent']}}% avtomatik baholangan natija</div><h2>{{level}}</h2>
-    {% if r['review_status']=='pending' %}<p class="muted">Yopiq savollaringiz o‘qituvchi tomonidan tekshirilgach yakuniy natija va sertifikat tayyor bo‘ladi.</p>{% else %}<p class="muted">Sertifikat ID: {{r['cert_id']}}</p><button onclick="window.print()">Sertifikatni PDF saqlash / chop etish</button>{% endif %}</section>
+    {% if r['review_status']=='pending' %}<p class="muted">Yopiq savollaringiz o‘qituvchi tomonidan tekshirilgach yakuniy natija va sertifikat tayyor bo‘ladi.</p>{% else %}<p class="muted">Sertifikat ID: {{r['cert_id']}}</p><a class="btn full" href="{{url_for('certificate_pdf',cert_id=r['cert_id'])}}">⬇ Sertifikatni PDF yuklab olish</a><p class="muted">Sertifikatni tekshirish: {{request.host_url}}certificate/{{r['cert_id']}}</p>{% endif %}</section>
     """,r=r,level=level)
+
+@app.get("/certificate/<cert_id>/pdf")
+def certificate_pdf(cert_id):
+    with db() as c:
+        r=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id WHERE cert_id=?",(cert_id,)).fetchone()
+    if not r: abort(404)
+    if r["review_status"]=="pending": return "Yopiq savollar tekshirilgach sertifikat yuklab olish mumkin.",409
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from xml.sax.saxutils import escape
+    buff=io.BytesIO()
+    doc=SimpleDocTemplate(buff,pagesize=landscape(A4),rightMargin=22*mm,leftMargin=22*mm,topMargin=18*mm,bottomMargin=18*mm)
+    styles=getSampleStyleSheet()
+    title_style=ParagraphStyle("CertTitle",parent=styles["Title"],fontName="Helvetica-Bold",fontSize=28,leading=34,textColor=colors.HexColor("#18336b"),alignment=TA_CENTER,spaceAfter=8)
+    center=ParagraphStyle("CertCenter",parent=styles["Normal"],fontSize=13,leading=20,alignment=TA_CENTER)
+    name_style=ParagraphStyle("CertName",parent=styles["Heading1"],fontSize=25,leading=31,textColor=colors.HexColor("#172b55"),alignment=TA_CENTER)
+    story=[Spacer(1,12*mm),Paragraph("NEURON",title_style),Paragraph("SERTIFIKAT",ParagraphStyle("CertSub",parent=title_style,fontSize=20,leading=25)),Spacer(1,7*mm),Paragraph("Ushbu sertifikat quyidagi ishtirokchiga taqdim etiladi:",center),Spacer(1,5*mm),Paragraph(escape(r["full_name"]),name_style),Spacer(1,5*mm),Paragraph("“"+escape(r["title"])+"” test sinovida qatnashib, quyidagi natijani qayd etdi.",center),Spacer(1,7*mm)]
+    data=[[Paragraph("<b>Natija</b>",center),Paragraph("<b>Foiz</b>",center),Paragraph("<b>Sertifikat ID</b>",center)],[Paragraph(f'{r["score"]} / {r["total"]}',center),Paragraph(f'{r["percent"]}%',center),Paragraph(escape(r["cert_id"]),center)]]
+    table=Table(data,colWidths=[65*mm,65*mm,75*mm],rowHeights=[13*mm,18*mm])
+    table.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#eaf0ff")),("BOX",(0,0),(-1,-1),1,colors.HexColor("#315efb")),("INNERGRID",(0,0),(-1,-1),.5,colors.HexColor("#cbd5e8")),("VALIGN",(0,0),(-1,-1),"MIDDLE")]))
+    story.extend([table,Spacer(1,10*mm),Paragraph("Berilgan sana: "+escape(str(r["created_at"])[:10]),center),Spacer(1,5*mm),Paragraph("Tekshirish havolasi: "+escape(request.host_url+"certificate/"+r["cert_id"]),ParagraphStyle("CertVerify",parent=center,fontSize=9,textColor=colors.HexColor("#52617a")))])
+    doc.build(story); buff.seek(0)
+    return send_file(buff,mimetype="application/pdf",as_attachment=True,download_name=f"NEURON_{r['cert_id']}.pdf")
 
 @app.route("/admin", methods=["GET","POST"])
 def admin_login():
