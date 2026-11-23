@@ -1,4 +1,4 @@
-import os, sqlite3, secrets, string, json, hashlib, urllib.request, urllib.error, io
+import os, sqlite3, secrets, string, json, hashlib, hmac, urllib.request, urllib.error, io
 import re
 try:
     import psycopg2
@@ -87,6 +87,7 @@ def init_db():
                     created_at TEXT NOT NULL, username TEXT UNIQUE, password_hash TEXT)""")
                 cur.execute("""CREATE TABLE IF NOT EXISTS blocked_students(test_id BIGINT NOT NULL,full_name TEXT NOT NULL,full_name_key TEXT NOT NULL,reason TEXT NOT NULL DEFAULT 'Ogohlantirish',created_at TEXT NOT NULL,PRIMARY KEY(test_id,full_name_key))""")
                 cur.execute("ALTER TABLE results ADD COLUMN IF NOT EXISTS certificate_approved BOOLEAN NOT NULL DEFAULT FALSE")
+                cur.execute("ALTER TABLE results ADD COLUMN IF NOT EXISTS student_chat_id TEXT")
                 cur.execute("ALTER TABLE teacher_accounts ADD COLUMN IF NOT EXISTS certificate_org_name TEXT NOT NULL DEFAULT ''")
                 cur.execute("ALTER TABLE teacher_accounts ADD COLUMN IF NOT EXISTS certificate_logo TEXT")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_neuron_test_results_test ON results(test_id)")
@@ -106,7 +107,7 @@ def init_db():
         for name, typ in [("file_name","TEXT"),("file_data","BLOB"),("answer_key","TEXT"),("question_count","INTEGER NOT NULL DEFAULT 0"),("manual_answers","TEXT"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0"),("teacher_id","TEXT"),("subject","TEXT NOT NULL DEFAULT ''"),("grade","TEXT NOT NULL DEFAULT ''"),("certificate_mode","TEXT NOT NULL DEFAULT 'manual'"),("certificate_min_score","REAL NOT NULL DEFAULT 0"),("is_active","INTEGER NOT NULL DEFAULT 1")]:
             if name not in cols: c.execute(f"ALTER TABLE tests ADD COLUMN {name} {typ}")
         result_cols = {r["name"] for r in c.execute("PRAGMA table_info(results)").fetchall()}
-        for name, typ in [("manual_answers","TEXT NOT NULL DEFAULT '[]'"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0"),("certificate_approved","INTEGER NOT NULL DEFAULT 0")]:
+        for name, typ in [("manual_answers","TEXT NOT NULL DEFAULT '[]'"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0"),("certificate_approved","INTEGER NOT NULL DEFAULT 0"),("student_chat_id","TEXT")]:
             if name not in result_cols: c.execute(f"ALTER TABLE results ADD COLUMN {name} {typ}")
         c.execute("""CREATE TABLE IF NOT EXISTS blocked_students(test_id INTEGER NOT NULL,full_name TEXT NOT NULL,full_name_key TEXT NOT NULL,reason TEXT NOT NULL DEFAULT 'Ogohlantirish',created_at TEXT NOT NULL,PRIMARY KEY(test_id,full_name_key))""")
         c.execute("""CREATE TABLE IF NOT EXISTS teacher_accounts(telegram_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, full_name TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', stage TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, username TEXT, password_hash TEXT)""")
@@ -123,7 +124,7 @@ BASE = """
 [hidden]{display:none!important}
 *{box-sizing:border-box}
 html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font:15px/1.5 Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;-webkit-font-smoothing:antialiased}
-body{min-height:100vh;padding-bottom:calc(176px + env(safe-area-inset-bottom));background:radial-gradient(900px 520px at 8% -12%,rgba(99,102,241,.25),transparent 60%),radial-gradient(760px 460px at 100% 0%,rgba(34,211,238,.14),transparent 55%),var(--bg);background-attachment:fixed}
+body{min-height:100vh;padding-bottom:calc(142px + env(safe-area-inset-bottom));background:radial-gradient(900px 520px at 8% -12%,rgba(99,102,241,.25),transparent 60%),radial-gradient(760px 460px at 100% 0%,rgba(34,211,238,.14),transparent 55%),var(--bg);background-attachment:fixed}
 :root[data-theme="light"] body{background:radial-gradient(900px 520px at 8% -12%,rgba(99,102,241,.14),transparent 60%),radial-gradient(760px 460px at 100% 0%,rgba(34,211,238,.12),transparent 55%),var(--bg)}
 button,input,select,textarea{font:inherit}
 a{color:var(--brand);text-decoration:none}
@@ -215,11 +216,11 @@ button:disabled{opacity:.4;cursor:not-allowed;transform:none}
 .feature-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:16px 0}
 .feature{margin:0;padding:18px}
 .feature b{display:block;font-size:16px;margin-bottom:4px}
-.app-dock{position:fixed;z-index:50;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));max-width:560px;margin:0 auto;display:flex;flex-wrap:wrap;gap:6px;justify-content:space-around;padding:8px;border:1px solid var(--line);border-radius:26px;background:rgba(12,22,40,.9);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);box-shadow:0 20px 50px -20px rgba(0,0,0,.6);overflow:visible}
+.app-dock{position:fixed;z-index:50;left:10px;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));max-width:560px;margin:0 auto;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;padding:6px;border:1px solid var(--line);border-radius:20px;background:rgba(12,22,40,.96);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);box-shadow:0 12px 32px -18px rgba(0,0,0,.65);overflow:hidden}
 .app-dock::-webkit-scrollbar{display:none}
-.app-dock a,.app-dock button{flex:1 1 calc(33.333% - 8px);min-width:0;min-height:54px;padding:6px 4px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border:0;border-radius:18px;background:transparent;color:#8ea3c2;font-size:10px;font-weight:750;text-decoration:none;white-space:nowrap;box-shadow:none}
+.app-dock a,.app-dock button{min-width:0;min-height:42px;padding:4px 3px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border:0;border-radius:18px;background:transparent;color:#8ea3c2;font-size:10px;font-weight:750;text-decoration:none;white-space:nowrap;box-shadow:none}
 .app-dock .active,.app-dock button.active{background:var(--soft);color:var(--cyan)}
-.app-dock .ico{font-size:19px;line-height:1.2}
+.app-dock .ico{font-size:16px;line-height:1.1}
 .app-dock a:hover,.app-dock button:hover{filter:none;transform:none}
 :root[data-theme="light"] .app-dock{background:rgba(255,255,255,.92);box-shadow:0 16px 40px -20px rgba(30,60,110,.35)}
 :root[data-theme="light"] .app-dock a,:root[data-theme="light"] .app-dock button{color:#60758d}
@@ -336,13 +337,13 @@ def take_test(test_id):
     <p class="muted">{{candidate['name']}} · {{test['subject'] or 'Fan ko‘rsatilmagan'}} · {{test['grade'] or 'Sinf ko‘rsatilmagan'}} · {{count}} ta savol</p><div class="timer">⏱ Qolgan vaqt: <span id="clock">{{remaining//60}}:{{"%02d"|format(remaining%60)}}</span></div><p id="focusNotice" class="notice" hidden></p>
     <p class="muted">Savollarni hujjatdan o‘qing. Javoblarni o‘ng/ pastdagi bo‘limda belgilang.</p>
     {% if test['file_name'] %}<div class="filebox"><b>📄 Test savollari</b><p class="muted">Savollar alohida brauzer oynasida ochiladi. Javoblarni belgilash uchun test oynasiga qayting.</p><a id="testFileLink" class="btn secondary full" href="{{file_url}}" target="_blank" rel="noopener noreferrer">📖 Savollarni yangi oynada ochish</a></div>{% else %}<div class="notice">Test savollari fayli biriktirilmagan.</div>{% endif %}
-    </section><section class="card"><h2>Javoblar varaqasi</h2><p class="muted">Har bir savol uchun variantni bosing. Yopiq savollarga yozma javob kiriting.</p><form id="answerForm" method="post" action="/submit/{{test['id']}}">
+    </section><section class="card"><h2>Javoblar varaqasi</h2><p class="muted">Har bir savol uchun variantni bosing. Yopiq savollarga yozma javob kiriting.</p><form id="answerForm" method="post" action="/submit/{{test['id']}}"><input type="hidden" name="telegram_init_data" id="telegramInitData">
     <div id="studentProgress" class="muted">1 / {{count}}-savol</div><div class="bubbles" id="studentNav">{% for i in range(1,count+1) %}<button type="button" class="bubble" data-go="{{i}}">{{i}}</button>{% endfor %}</div>
     {% for i in range(1,count+1) %}{% set k=(keys[i-1]|string|upper) if keys|length>=i else '' %}{% set opts=['TRUE','FALSE'] if k in ['TRUE','FALSE'] else (['A','B','C','D'] if k in ['A','B','C','D'] else []) %}<div class="question student-question" data-q="{{i}}" {% if i!=1 %}hidden{% endif %}><div class="answer-row"><div class="qnum">{{i}}</div><div><b>{{i}}-savol</b><p class="muted">{{'Variantni tanlang yoki yozing' if opts else 'Javobingizni yozing'}}</p>{% if opts %}<div class="bubbles">{% for v in opts %}<label class="bubble"><input type="radio" name="q{{i}}" value="{{v}}"><span>{{'T' if v=='TRUE' else 'N' if v=='FALSE' else v}}</span></label>{% endfor %}</div>{% endif %}<input name="q{{i}}_text" placeholder="Javobingiz" aria-label="{{i}}-savol yozma javobi"></div></div></div>{% endfor %}
     <div class="grid"><button type="button" class="secondary" id="prevQ">← Oldingi</button><button type="button" id="nextQ">Keyingi →</button></div><button class="full" type="submit">Testni yakunlash ✓</button></form></section></section></div>
     <script>
 const deadline={{(session.get('test_deadline',0)*1000)|int}};
-const el=document.getElementById('clock'),form=document.getElementById('answerForm');
+const el=document.getElementById('clock'),form=document.getElementById('answerForm');const initField=document.getElementById('telegramInitData');if(initField&&window.Telegram&&Telegram.WebApp){initField.value=Telegram.WebApp.initData||'';Telegram.WebApp.ready();}
 let focusWarnings={{session.get('focus_warning_count',0)|int}},openingTestFile=false,submitted=false;
 function finish(){if(submitted)return;submitted=true;let h=form.querySelector('[name="focus_warning_count"]');if(!h){h=document.createElement('input');h.type='hidden';h.name='focus_warning_count';form.appendChild(h);}h.value=String(focusWarnings);form.submit();}
 function tick(){const left=Math.max(0,Math.ceil((deadline-Date.now())/1000));el.textContent=Math.floor(left/60)+':'+String(left%60).padStart(2,'0');if(left<=0)finish();}
