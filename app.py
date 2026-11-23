@@ -256,7 +256,11 @@ def submit_test(test_id):
         cur=c.execute("INSERT INTO results(test_id,full_name,student_id,score,total,percent,cert_id,created_at,manual_answers,review_status,focus_warning) VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
         (test_id,candidate["name"],"",score,total,percent,cert,datetime.utcnow().isoformat(),json.dumps(manual,ensure_ascii=False),"pending" if manual else "checked",warnings))
         result_id=cur.fetchone()["id"]
-    try: notify_teacher("🧪 NEURON — Yangi test\\nO‘quvchi: "+candidate["name"]+"\\nTest: "+test["title"]+"\\nNatija: "+str(score)+"/"+str(total)+" ("+str(percent)+"%)\\nYopiq savollar: "+str(len(manual))+"\\nOgohlantirishlar: "+str(warnings)+"\\nID: "+str(result_id))
+    try:
+        review_line="✍️ Yopiq savollar: "+str(len(manual))+" ta" if manual else "✍️ Yopiq savollar: yo‘q"
+        warning_line="⚠️ Ogohlantirishlar: "+str(warnings)+" ta" if warnings else "✅ Ogohlantirishlar: yo‘q"
+        status_line="🕒 O‘qituvchi tekshiruvi kutilmoqda" if manual or warnings>=2 else "🏅 Sertifikat tayyor"
+        notify_teacher("📊 NEURON — TEST NATIJASI\\n\\n👤 O‘quvchi: "+candidate["name"]+"\\n📝 Test: "+test["title"]+"\\n🎯 Natija: "+str(score)+"/"+str(total)+" ("+str(percent)+"%)\\n"+review_line+"\\n"+warning_line+"\\n"+status_line+"\\n🆔 Natija ID: "+str(result_id))
     except Exception: app.logger.exception("Teacher notification failed")
     session.pop("candidate",None); session.pop("started_at",None); session.pop("test_deadline",None)
     return redirect(url_for("certificate", cert_id=cert))
