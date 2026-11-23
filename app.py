@@ -537,20 +537,32 @@ def notify_teacher(message):
 
 def certificate_image(cert_id):
     from PIL import Image, ImageDraw, ImageFont
-    with db() as c: r=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id WHERE cert_id=?",(cert_id,)).fetchone()
+    with db() as c:
+        r=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id WHERE cert_id=?",(cert_id,)).fetchone()
     if not r or r["review_status"]=="pending" or int(r["focus_warning"] or 0)>=2: return None
-    im=Image.new("RGB",(1400,990),"#f4f7ff"); d=ImageDraw.Draw(im)
-    d.rounded_rectangle((35,35,1365,955),radius=32,outline="#315efb",width=8,fill="#ffffff")
-    d.rounded_rectangle((65,65,1335,925),radius=24,outline="#c7d5ff",width=3)
-    f=lambda size: ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",size) if os.path.exists("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf") else ImageFont.load_default()
-    def center(y,text,font,fill): d.text((700,y),text,font=font,fill=fill,anchor="mm")
-    center(150,"NEURON",f(64),"#18336b"); center(245,"SERTIFIKAT",f(48),"#315efb")
-    center(340,"Ushbu sertifikat taqdim etiladi",f(27),"#52617a")
-    center(445,r["full_name"],f(48),"#172b55")
-    center(535,"“"+r["title"]+"” test sinovi natijasi",f(27),"#52617a")
-    center(650,f'{r["score"]} / {r["total"]}     |     {r["percent"]}%',f(42),"#18336b")
-    center(755,"Sertifikat ID: "+r["cert_id"],f(24),"#52617a")
-    center(825,"Sana: "+str(r["created_at"])[:10],f(22),"#52617a")
+    im=Image.new("RGB",(1600,900),"#f3f6fc"); d=ImageDraw.Draw(im)
+    d.rounded_rectangle((35,35,1565,865),radius=34,outline="#315efb",width=8,fill="#ffffff")
+    d.rounded_rectangle((68,68,1532,832),radius=24,outline="#c7d5ff",width=3)
+    font_path="/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    def font(size):
+        try: return ImageFont.truetype(font_path,size)
+        except Exception: return ImageFont.load_default()
+    def centered(y,text,size,color,max_width=1380):
+        size=int(size)
+        while size>16:
+            f=font(size)
+            box=d.textbbox((0,0),str(text),font=f)
+            if box[2]-box[0]<=max_width: break
+            size-=2
+        d.text((800,y),str(text),font=f,fill=color,anchor="mm")
+    centered(155,"NEURON",62,"#18336b")
+    centered(255,"SERTIFIKAT",43,"#315efb")
+    centered(340,"Ushbu sertifikat taqdim etiladi",25,"#52617a")
+    centered(445,r["full_name"],47,"#172b55")
+    centered(535,"“"+str(r["title"])+"” test sinovi natijasi",24,"#52617a")
+    centered(665,f'{float(r["score"]):.1f} / {r["total"]}     |     {r["percent"]}%',39,"#18336b")
+    centered(755,"Sertifikat ID: "+str(r["cert_id"]),20,"#52617a")
+    centered(800,"Sana: "+str(r["created_at"])[:10],18,"#52617a")
     out=io.BytesIO(); im.save(out,format="PNG"); out.seek(0); return out
 
 def deliver_certificate(cert_id):
