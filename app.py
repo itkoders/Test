@@ -252,8 +252,8 @@ def telegram_webhook():
         telegram_api("sendMessage", {
             "chat_id": chat_id,
             "text": (
-                f"Assalomu alaykum, {first_name}! 👋\\n\\n"
-                "📚 Onlayn test platformasiga xush kelibsiz.\\n"
+                f"Assalomu alaykum, {first_name}! 👋\n\n"
+                "📚 Onlayn test platformasiga xush kelibsiz.\n"
                 "Testni boshlash uchun quyidagi tugmani bosing. "
                 "Natijangizdan so‘ng sertifikatingizni olishingiz mumkin."
             ),
