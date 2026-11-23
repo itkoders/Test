@@ -762,7 +762,7 @@ def certificate_image(cert_id):
     import qrcode
     from urllib.parse import quote
     with db() as c:
-        r=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id WHERE cert_id=?",(cert_id,)).fetchone()
+        r=c.execute("SELECT results.*,tests.title,teacher_accounts.full_name AS teacher_full_name,teacher_accounts.certificate_org_name,teacher_accounts.certificate_logo FROM results JOIN tests ON tests.id=results.test_id LEFT JOIN teacher_accounts ON teacher_accounts.telegram_id=tests.teacher_id WHERE cert_id=?",(cert_id,)).fetchone()
     if not r or r["review_status"]=="pending" or int(r["focus_warning"] or 0)>=2: return None
 
     W,H=1600,1131
