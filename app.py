@@ -64,23 +64,26 @@ def init_db():
                     created_at TEXT NOT NULL, file_name TEXT, file_data BYTEA, answer_key TEXT,
                     question_count INTEGER NOT NULL DEFAULT 0, manual_answers TEXT,
                     review_status TEXT NOT NULL DEFAULT 'checked', focus_warning INTEGER NOT NULL DEFAULT 0,
-                    manual_score DOUBLE PRECISION NOT NULL DEFAULT 0, teacher_id TEXT, subject TEXT NOT NULL DEFAULT '', grade TEXT NOT NULL DEFAULT '')""")
+                    manual_score DOUBLE PRECISION NOT NULL DEFAULT 0, teacher_id TEXT, subject TEXT NOT NULL DEFAULT '', grade TEXT NOT NULL DEFAULT '', certificate_mode TEXT NOT NULL DEFAULT 'manual', certificate_min_score DOUBLE PRECISION NOT NULL DEFAULT 0)""")
                 cur.execute("ALTER TABLE tests ADD COLUMN IF NOT EXISTS teacher_id TEXT")
                 cur.execute("ALTER TABLE tests ADD COLUMN IF NOT EXISTS subject TEXT NOT NULL DEFAULT ''")
                 cur.execute("ALTER TABLE tests ADD COLUMN IF NOT EXISTS grade TEXT NOT NULL DEFAULT ''")
+                cur.execute("ALTER TABLE tests ADD COLUMN IF NOT EXISTS certificate_mode TEXT NOT NULL DEFAULT 'manual'")
+                cur.execute("ALTER TABLE tests ADD COLUMN IF NOT EXISTS certificate_min_score DOUBLE PRECISION NOT NULL DEFAULT 0")
                 cur.execute("""CREATE TABLE IF NOT EXISTS results(
                     id BIGSERIAL PRIMARY KEY, test_id BIGINT NOT NULL, full_name TEXT NOT NULL,
                     student_id TEXT NOT NULL DEFAULT '', score DOUBLE PRECISION NOT NULL,
                     total INTEGER NOT NULL, percent INTEGER NOT NULL, cert_id TEXT UNIQUE NOT NULL,
                     created_at TEXT NOT NULL, manual_answers TEXT NOT NULL DEFAULT '[]',
                     review_status TEXT NOT NULL DEFAULT 'checked', focus_warning INTEGER NOT NULL DEFAULT 0,
-                    manual_score DOUBLE PRECISION NOT NULL DEFAULT 0)""")
+                    manual_score DOUBLE PRECISION NOT NULL DEFAULT 0, certificate_approved BOOLEAN NOT NULL DEFAULT FALSE)""")
                 cur.execute("""CREATE TABLE IF NOT EXISTS teacher_accounts(
                     telegram_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, full_name TEXT NOT NULL DEFAULT '',
                     subject TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'pending', stage TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL, username TEXT UNIQUE, password_hash TEXT)""")
                 cur.execute("""CREATE TABLE IF NOT EXISTS blocked_students(test_id BIGINT NOT NULL,full_name TEXT NOT NULL,full_name_key TEXT NOT NULL,reason TEXT NOT NULL DEFAULT 'Ogohlantirish',created_at TEXT NOT NULL,PRIMARY KEY(test_id,full_name_key))""")
+                cur.execute("ALTER TABLE results ADD COLUMN IF NOT EXISTS certificate_approved BOOLEAN NOT NULL DEFAULT FALSE")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_neuron_test_results_test ON results(test_id)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_neuron_test_teachers_status ON teacher_accounts(status)")
         return
@@ -95,10 +98,10 @@ def init_db():
             score INTEGER NOT NULL, total INTEGER NOT NULL, percent INTEGER NOT NULL,
             cert_id TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL)""")
         cols = {r["name"] for r in c.execute("PRAGMA table_info(tests)").fetchall()}
-        for name, typ in [("file_name","TEXT"),("file_data","BLOB"),("answer_key","TEXT"),("question_count","INTEGER NOT NULL DEFAULT 0"),("manual_answers","TEXT"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0"),("teacher_id","TEXT"),("subject","TEXT NOT NULL DEFAULT ''"),("grade","TEXT NOT NULL DEFAULT ''")]:
+        for name, typ in [("file_name","TEXT"),("file_data","BLOB"),("answer_key","TEXT"),("question_count","INTEGER NOT NULL DEFAULT 0"),("manual_answers","TEXT"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0"),("teacher_id","TEXT"),("subject","TEXT NOT NULL DEFAULT ''"),("grade","TEXT NOT NULL DEFAULT ''"),("certificate_mode","TEXT NOT NULL DEFAULT 'manual'"),("certificate_min_score","REAL NOT NULL DEFAULT 0")]:
             if name not in cols: c.execute(f"ALTER TABLE tests ADD COLUMN {name} {typ}")
         result_cols = {r["name"] for r in c.execute("PRAGMA table_info(results)").fetchall()}
-        for name, typ in [("manual_answers","TEXT NOT NULL DEFAULT '[]'"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0")]:
+        for name, typ in [("manual_answers","TEXT NOT NULL DEFAULT '[]'"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0"),("certificate_approved","INTEGER NOT NULL DEFAULT 0")]:
             if name not in result_cols: c.execute(f"ALTER TABLE results ADD COLUMN {name} {typ}")
         c.execute("""CREATE TABLE IF NOT EXISTS blocked_students(test_id INTEGER NOT NULL,full_name TEXT NOT NULL,full_name_key TEXT NOT NULL,reason TEXT NOT NULL DEFAULT 'Ogohlantirish',created_at TEXT NOT NULL,PRIMARY KEY(test_id,full_name_key))""")
         c.execute("""CREATE TABLE IF NOT EXISTS teacher_accounts(telegram_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, full_name TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', stage TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, username TEXT, password_hash TEXT)""")
