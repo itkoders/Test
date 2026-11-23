@@ -857,19 +857,22 @@ def certificate_image(cert_id):
     d.ellipse((710,82,890,262),outline=gold,width=5,fill="#fffefa")
     d.ellipse((722,94,878,250),outline=gold_light,width=2)
     logo_data=r["certificate_logo"]
-    if logo_data:
-        import base64
-        try:
-            logo=Image.open(io.BytesIO(base64.b64decode(logo_data))).convert("RGB")
-            logo.thumbnail((148,148))
-            mask=Image.new("L",logo.size,0)
-            ImageDraw.Draw(mask).ellipse((0,0,logo.width-1,logo.height-1),fill=255)
-            im.paste(logo,(800-logo.width//2,172-logo.height//2),mask)
-        except Exception:
-            center(145,"N",76,blue,True,130)
-    else:
+    try:
+        if logo_data:
+            import base64
+            logo=Image.open(io.BytesIO(base64.b64decode(logo_data))).convert("RGBA")
+        else:
+            # Default NEURON TEST BOT logo supplied by the owner.
+            logo_path=os.path.join(os.path.dirname(__file__),"static","neuron_default_logo.png.b64")
+            with open(logo_path,"r",encoding="ascii") as logo_file:
+                logo=Image.open(io.BytesIO(base64.b64decode(logo_file.read().strip()))).convert("RGBA")
+        logo.thumbnail((148,148))
+        mask=Image.new("L",logo.size,0)
+        ImageDraw.Draw(mask).ellipse((0,0,logo.width-1,logo.height-1),fill=255)
+        im.paste(logo,(800-logo.width//2,172-logo.height//2),mask)
+    except Exception:
+        app.logger.exception("Certificate logo could not be loaded")
         center(145,"N",76,blue,True,130)
-        center(218,"NEURON",16,gold,True,150)
     org_name=(r["certificate_org_name"] or r["teacher_full_name"] or "NEURON TEST BOT").strip()
     center(300,org_name,28,blue,True,1320)
     center(345,"BILIM VA MALAKALARNI BAHOLASH TIZIMI",19,muted,True)
