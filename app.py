@@ -1,51 +1,61 @@
-import os
-import sqlite3
-import secrets
-import string
+import os, sqlite3, secrets, string, json, hashlib, urllib.request, urllib.error, io
 from datetime import datetime
 from functools import wraps
-from flask import Flask, request, redirect, url_for, session, flash, render_template_string, abort
+from flask import Flask, request, redirect, url_for, session, flash, render_template_string, abort, send_file, Response
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-this-before-production")
+app.config["MAX_CONTENT_LENGTH"] = 18 * 1024 * 1024
 DB = os.environ.get("DATABASE_PATH", "mirzayev_group.db")
 ADMIN_USER = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 
 def db():
-    conn = sqlite3.connect(DB)
-    conn.row_factory = sqlite3.Row
-    return conn
+    c = sqlite3.connect(DB)
+    c.row_factory = sqlite3.Row
+    return c
 
 def init_db():
     with db() as c:
         c.execute("""CREATE TABLE IF NOT EXISTS tests(
             id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
             code TEXT UNIQUE NOT NULL, duration INTEGER NOT NULL DEFAULT 30,
-            questions TEXT NOT NULL, created_at TEXT NOT NULL)""")
+            questions TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)""")
         c.execute("""CREATE TABLE IF NOT EXISTS results(
             id INTEGER PRIMARY KEY AUTOINCREMENT, test_id INTEGER NOT NULL,
-            full_name TEXT NOT NULL, student_id TEXT NOT NULL,
+            full_name TEXT NOT NULL, student_id TEXT NOT NULL DEFAULT '',
             score INTEGER NOT NULL, total INTEGER NOT NULL, percent INTEGER NOT NULL,
             cert_id TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL)""")
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(tests)").fetchall()}
+        for name, typ in [("file_name","TEXT"),("file_data","BLOB"),("answer_key","TEXT"),("question_count","INTEGER NOT NULL DEFAULT 0")]:
+            if name not in cols:
+                c.execute(f"ALTER TABLE tests ADD COLUMN {name} {typ}")
 
 BASE = """
-<!doctype html><html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{{ title }} — MIRZAYEV GROUP</title><style>
-:root{--navy:#08152e;--gold:#d6b56d;--cream:#f7f3e9}*{box-sizing:border-box}
-body{margin:0;background:linear-gradient(140deg,#071329,#14284a);color:#f8f5ed;font:16px Arial,sans-serif;min-height:100vh}
-header{padding:20px 5%;border-bottom:1px solid #b99a5944;display:flex;justify-content:space-between;align-items:center}
-.brand{font-weight:800;letter-spacing:2px;color:var(--gold)}main{max-width:760px;margin:36px auto;padding:0 16px}
-.card{background:#fff;color:#17233a;border-radius:18px;padding:26px;box-shadow:0 15px 50px #0005}
-h1,h2{margin-top:0}h1{font-size:26px}.muted{color:#687386}.gold{color:#a77c2b}
-input,textarea,select{width:100%;padding:13px;border:1px solid #cbd2dc;border-radius:9px;margin:7px 0 15px;font-size:16px}
-button,.btn{display:inline-block;background:var(--navy);color:white;padding:13px 18px;border:0;border-radius:9px;text-decoration:none;font-weight:700;cursor:pointer}
-button:hover,.btn:hover{background:#1b3764}.notice{padding:12px;background:#fff4d8;border-radius:9px;margin:12px 0;color:#654b16}
-.question{padding:14px 0;border-bottom:1px solid #e3e7ed}.option{display:block;padding:8px}
-footer{text-align:center;color:#b8c3d5;padding:24px;font-size:13px}
-</style></head><body><header><div class="brand">MIRZAYEV GROUP</div><div>ONLINE TEST & CERTIFICATE</div></header><main>
+<!doctype html><html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101b36"><title>{{ title }} — NEURON</title>
+<style>
+:root{--navy:#101b36;--blue:#315efb;--ink:#18233b;--muted:#718096;--line:#e7ebf2;--bg:#f3f6fc;--green:#0d9b72}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px Inter,system-ui,Arial,sans-serif}
+header{background:linear-gradient(120deg,#101b36,#243d75);color:white;padding:17px max(18px,calc((100% - 1080px)/2));display:flex;align-items:center;justify-content:space-between}
+.brand{font-size:19px;font-weight:850;letter-spacing:1.5px}.brand span{color:#9db5ff}
+main{max-width:1080px;margin:28px auto;padding:0 16px 36px}.card{background:white;border:1px solid var(--line);border-radius:20px;padding:24px;box-shadow:0 12px 35px #1c31500b;margin-bottom:18px}
+h1{font-size:clamp(24px,5vw,34px);line-height:1.15;margin:0 0 12px}h2{font-size:21px;margin:0 0 15px}.muted{color:var(--muted);line-height:1.6}.eyebrow{color:var(--blue);font-size:12px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase}
+input,select,textarea{width:100%;padding:14px;border:1px solid #d8deea;border-radius:12px;margin:7px 0 16px;font:inherit;background:#fff;color:var(--ink)}
+input:focus,textarea:focus,select:focus{outline:3px solid #315efb22;border-color:var(--blue)}
+label{font-weight:650;font-size:14px}.btn,button{display:inline-flex;align-items:center;justify-content:center;gap:8px;background:var(--blue);color:white;border:0;border-radius:12px;padding:14px 19px;font-weight:750;font-size:14px;text-decoration:none;cursor:pointer;min-height:48px}
+.btn.secondary,button.secondary{background:#eef2ff;color:#2448c7}.btn.dark{background:var(--navy)}.btn.full{width:100%}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px}.notice{background:#fff5dc;color:#805b12;padding:13px 15px;border-radius:12px;margin-bottom:14px}
+.stat{padding:17px;background:#f6f8ff;border-radius:14px}.stat b{display:block;font-size:25px}.filebox{border:1px dashed #9eafd2;background:#f7f9ff;border-radius:16px;padding:20px;text-align:center}
+.question{border:1px solid var(--line);border-radius:15px;padding:16px;margin:12px 0}.answer-row{display:grid;grid-template-columns:48px 1fr;align-items:center;gap:12px;margin:10px 0}.qnum{background:#eef2ff;color:#315efb;border-radius:12px;padding:11px;text-align:center;font-weight:800}
+iframe{width:100%;height:68vh;border:1px solid var(--line);border-radius:14px;background:white}.docx-view{max-height:68vh;overflow:auto;border:1px solid var(--line);border-radius:14px;padding:18px;background:white;line-height:1.7}
+.timer{position:sticky;top:8px;z-index:3;background:#101b36;color:white;border-radius:13px;padding:12px 16px;text-align:center;font-weight:800}
+footer{text-align:center;color:#8994a8;padding:22px;font-size:12px}
+@media(max-width:600px){main{margin:16px auto}.card{padding:18px;border-radius:16px}header{padding:15px 18px}.answer-row{grid-template-columns:40px 1fr}.btn,button{width:100%}}
+</style></head><body><header><div class="brand">NEURON<span>.</span></div><div>ONLAYN TEST PLATFORMASI</div></header><main>
 {% with messages=get_flashed_messages() %}{% for m in messages %}<div class="notice">{{m}}</div>{% endfor %}{% endwith %}
-{{ content|safe }}</main><footer>© MIRZAYEV GROUP · Ta’lim va natijalar platformasi</footer></body></html>
+{{ content|safe }}</main><footer>NEURON · Bilimni sinash va natijalarni baholash platformasi</footer></body></html>
 """
 
 def page(title, body, **ctx):
@@ -54,82 +64,105 @@ def page(title, body, **ctx):
 def admin_required(fn):
     @wraps(fn)
     def wrapper(*a, **kw):
-        if not session.get("admin"):
-            return redirect(url_for("admin_login"))
+        if not session.get("admin"): return redirect(url_for("admin_login"))
         return fn(*a, **kw)
     return wrapper
+
+def get_test(test_id):
+    with db() as c: return c.execute("SELECT * FROM tests WHERE id=?", (test_id,)).fetchone()
 
 @app.get("/")
 def home():
     return page("Bosh sahifa", """
-    <section class="card"><p class="gold"><b>ROYAL PREMIUM EDUCATION</b></p>
-    <h1>Bilimingizni sinab ko‘ring.</h1><p class="muted">Test kodini kiriting, savollarga javob bering va natijangiz bo‘yicha sertifikat oling.</p>
-    <form method="post" action="/start">
-      <label>To‘liq ism-familiya</label><input name="full_name" required maxlength="100" placeholder="Masalan: Ali Valiyev">
-      <label>Test kodi</label><input name="code" required maxlength="30" placeholder="Admin bergan kod">
-      <button type="submit">Testni boshlash →</button>
-    </form><p class="muted">Adminmisiz? <a href="/admin" class="gold">Admin panel</a></p></section>
+    <section class="card"><p class="eyebrow">NEURON EDUCATION</p><h1>Bilimingizni sinab ko‘ring.</h1>
+    <p class="muted">Test kodini kiriting, savollar faylini ko‘ring va javoblarni Mini App ichida belgilang.</p>
+    <form method="post" action="/start"><label>Ism va familiya</label><input name="full_name" required maxlength="100" placeholder="Masalan: Ali Valiyev">
+    <label>Test kodi</label><input name="code" required maxlength="30" placeholder="O‘qituvchi bergan kod"><button class="full">Testni boshlash →</button></form>
+    <p class="muted">Adminmisiz? <a href="/admin">Admin panelga kirish</a></p></section>
     """)
 
 @app.post("/start")
 def start_test():
     name=request.form.get("full_name","").strip()
     code=request.form.get("code","").strip().upper()
-    with db() as c:
-        test=c.execute("SELECT * FROM tests WHERE code=?",(code,)).fetchone()
+    with db() as c: test=c.execute("SELECT * FROM tests WHERE code=?", (code,)).fetchone()
     if not name or not test:
-        flash("Ma’lumotlarni tekshiring. Test kodi topilmadi.")
+        flash("Ism yoki test kodi noto‘g‘ri.")
         return redirect(url_for("home"))
     session["candidate"]={"name":name,"test_id":test["id"]}
+    session["started_at"]=datetime.utcnow().timestamp()
     return redirect(url_for("take_test", test_id=test["id"]))
 
 @app.get("/test/<int:test_id>")
 def take_test(test_id):
     candidate=session.get("candidate")
-    if not candidate or candidate["test_id"]!=test_id: return redirect(url_for("home"))
-    with db() as c: test=c.execute("SELECT * FROM tests WHERE id=?",(test_id,)).fetchone()
-    if not test: abort(404)
-    questions=[x.split("|") for x in test["questions"].splitlines() if x.strip()]
-    return page("Test", """
-    <section class="card"><p class="gold"><b>{{test['title']}}</b></p><h1>Test topshirish</h1>
-    <p class="muted">{{candidate['name']}} · {{test['duration']}} daqiqa</p>
-    <form method="post" action="/submit/{{test['id']}}">
-    {% for q in questions %}{% set q_idx=loop.index0 %}<div class="question"><b>{{loop.index}}. {{q[0]}}</b>
-    {% for opt in q[1:5] %}<label class="option"><input style="width:auto;margin:0 8px 0 0" type="radio" name="q{{q_idx}}" value="{{'ABCD'[loop.index0]}}" required>{{'ABCD'[loop.index0]}}) {{opt}}</label>{% endfor %}
-    </div>{% endfor %}<button type="submit">Javoblarni yuborish</button></form></section>
-    """, test=test, candidate=candidate, questions=questions)
+    test=get_test(test_id)
+    if not candidate or candidate["test_id"]!=test_id or not test: return redirect(url_for("home"))
+    count=int(test["question_count"] or 0)
+    if count<1: count=len([x for x in (test["questions"] or "").splitlines() if x.strip()])
+    return page("Test ishlash", """
+    <div class="grid"><section class="card"><p class="eyebrow">TEST TOPSHIRISH</p><h1>{{test['title']}}</h1>
+    <p class="muted">{{candidate['name']}} · {{count}} ta savol</p><div class="timer">⏱ Qolgan vaqt: <span id="clock">{{test['duration']}}:00</span></div>
+    <p class="muted">Savollarni hujjatdan o‘qing. Javoblarni o‘ng/ pastdagi bo‘limda belgilang.</p>
+    {% if test['file_name'] %}<a class="btn secondary full" href="/testfile/{{test['id']}}" target="_blank">📄 Faylni alohida oynada ochish</a>{% endif %}
+    </section><section class="card"><h2>Javoblar varaqasi</h2><form id="answerForm" method="post" action="/submit/{{test['id']}}">
+    {% for i in range(1,count+1) %}<div class="answer-row"><div class="qnum">{{i}}</div><div>
+    <select name="q{{i}}" aria-label="{{i}}-savol javobi" required><option value="">Javobni tanlang</option>
+    <option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option>
+    <option value="TRUE">To‘g‘ri</option><option value="FALSE">Noto‘g‘ri</option>
+    </select></div></div>{% endfor %}
+    <button class="full" type="submit">Testni yakunlash ✓</button></form></section></div>
+    <script>let left={{test['duration']}}*60;const el=document.getElementById('clock');const form=document.getElementById('answerForm');function tick(){let m=Math.floor(left/60),s=left%60;el.textContent=m+':'+String(s).padStart(2,'0');if(left<=0){form.submit();return;}left--;}tick();setInterval(tick,1000);</script>
+    """,test=test,candidate=candidate,count=count)
+
+@app.get("/testfile/<int:test_id>")
+def test_file(test_id):
+    test=get_test(test_id)
+    candidate=session.get("candidate")
+    if not test or not candidate or candidate["test_id"]!=test_id or not test["file_data"]: abort(404)
+    name=test["file_name"] or "test"
+    if name.lower().endswith(".pdf"):
+        return send_file(io.BytesIO(test["file_data"]), mimetype="application/pdf", download_name=name)
+    try:
+        from docx import Document
+        doc=Document(io.BytesIO(test["file_data"]))
+        paras="".join("<p>"+p.text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")+"</p>" for p in doc.paragraphs if p.text.strip())
+        tables=""
+        for table in doc.tables:
+            tables+="<table border='1' cellpadding='7' cellspacing='0' style='border-collapse:collapse;width:100%'>"
+            for row in table.rows:
+                tables+="<tr>"+"".join("<td>"+cell.text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")+"</td>" for cell in row.cells)+"</tr>"
+            tables+="</table>"
+        return page("Test hujjati", "<section class='card'><p class='eyebrow'>TEST HUJJATI</p><h2>"+secure_filename(name)+"</h2><div class='docx-view'>"+paras+tables+"</div></section>")
+    except Exception:
+        return "DOCX faylni o‘qib bo‘lmadi. Faylni qayta yuklang.", 422
 
 @app.post("/submit/<int:test_id>")
 def submit_test(test_id):
     candidate=session.get("candidate")
-    if not candidate or candidate["test_id"]!=test_id: return redirect(url_for("home"))
-    with db() as c: test=c.execute("SELECT * FROM tests WHERE id=?",(test_id,)).fetchone()
-    if not test: abort(404)
-    questions=[x.split("|") for x in test["questions"].splitlines() if x.strip()]
-    score=sum(1 for i,q in enumerate(questions) if len(q)>=6 and request.form.get(f"q{i}","").upper()==q[5].strip().upper())
-    total=len(questions); percent=round(score*100/total) if total else 0
-    cert="MG-"+secrets.token_hex(4).upper()
+    test=get_test(test_id)
+    if not candidate or candidate["test_id"]!=test_id or not test: return redirect(url_for("home"))
+    try: key=json.loads(test["answer_key"] or "[]")
+    except Exception: key=[]
+    if not key: abort(400, "Javoblar kaliti mavjud emas.")
+    score=sum(1 for i,correct in enumerate(key,1) if request.form.get(f"q{i}","").strip().upper()==str(correct).strip().upper())
+    total=len(key); percent=round(score*100/total) if total else 0
+    cert="NR-"+secrets.token_hex(4).upper()
     with db() as c:
         c.execute("INSERT INTO results(test_id,full_name,student_id,score,total,percent,cert_id,created_at) VALUES(?,?,?,?,?,?,?,?)",
-          (test_id,candidate["name"],"",score,total,percent,cert,datetime.utcnow().isoformat()))
-    session.pop("candidate",None)
+        (test_id,candidate["name"],"",score,total,percent,cert,datetime.utcnow().isoformat()))
+    session.pop("candidate",None); session.pop("started_at",None)
     return redirect(url_for("certificate", cert_id=cert))
 
 @app.get("/certificate/<cert_id>")
 def certificate(cert_id):
-    with db() as c:
-        r=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id WHERE cert_id=?",(cert_id,)).fetchone()
+    with db() as c: r=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id WHERE cert_id=?", (cert_id,)).fetchone()
     if not r: abort(404)
     level="A’lo" if r["percent"]>=90 else "Yaxshi" if r["percent"]>=70 else "Qoniqarli" if r["percent"]>=50 else "Ishtirok etdi"
-    return page("Sertifikat", """
-    <section class="card" style="text-align:center;border:7px double #c6a45e;background:#fbf7ed;padding:34px">
-    <p class="gold"><b>MIRZAYEV GROUP</b></p><h1 style="font-family:Georgia;font-size:34px;color:#14284a">SERTIFIKAT</h1>
-    <p class="muted">Ushbu sertifikat quyidagi ishtirokchiga taqdim etiladi</p>
-    <h2 style="color:#9a742d">{{r['full_name']}}</h2><p>{{r['title']}} testida qatnashgani uchun</p>
-    <h2 style="color:#14284a">{{r['score']}} / {{r['total']}} · {{r['percent']}}%</h2>
-    <p><b>{{level}}</b></p><hr><p class="muted">Sertifikat ID: {{r['cert_id']}}</p>
-    <p class="muted">Sana: {{r['created_at'][:10]}}</p><button onclick="window.print()">Sertifikatni chop etish / PDF</button>
-    </section>
+    return page("Natija va sertifikat", """
+    <section class="card" style="text-align:center"><p class="eyebrow">NEURON NATIJA</p><h1>{{r['full_name']}}</h1><p class="muted">{{r['title']}}</p>
+    <div class="stat"><b>{{r['score']}} / {{r['total']}}</b>{{r['percent']}}% natija</div><h2>{{level}}</h2>
+    <p class="muted">Sertifikat ID: {{r['cert_id']}}</p><button onclick="window.print()">Sertifikatni PDF saqlash / chop etish</button></section>
     """,r=r,level=level)
 
 @app.route("/admin", methods=["GET","POST"])
@@ -138,12 +171,9 @@ def admin_login():
     if request.method=="POST":
         if ADMIN_PASSWORD and request.form.get("username")==ADMIN_USER and secrets.compare_digest(request.form.get("password",""),ADMIN_PASSWORD):
             session["admin"]=True; return redirect(url_for("dashboard"))
-        flash("Login yoki parol noto‘g‘ri. Render ENV’da ADMIN_USERNAME=admin va ADMIN_PASSWORD qiymatlarini tekshiring.")
-    return page("Admin kirish", """
-    <section class="card"><h1>Admin panelga kirish</h1><form method="post">
-    <label>Login</label><input name="username" required value="admin">
-    <label>Parol</label><input name="password" type="password" required>
-    <button>Kirish</button></form></section>""")
+        flash("Login yoki parol noto‘g‘ri. Render ENV sozlamalarini tekshiring.")
+    return page("Admin kirish", """<section class="card"><p class="eyebrow">NEURON ADMIN</p><h1>Boshqaruv paneli</h1><form method="post">
+    <label>Login</label><input name="username" required><label>Parol</label><input name="password" type="password" required><button class="full">Kirish</button></form></section>""")
 
 @app.get("/admin/dashboard")
 @admin_required
@@ -151,128 +181,89 @@ def dashboard():
     with db() as c:
         tests=c.execute("SELECT * FROM tests ORDER BY id DESC").fetchall()
         results=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id ORDER BY results.id DESC LIMIT 100").fetchall()
-    return page("Admin", """
-    <section class="card"><h1>Admin boshqaruv paneli</h1><p class="muted">Testlar va ishtirokchilar natijalari</p>
-    <h2>Yangi test yaratish</h2><form method="post" action="/admin/create">
-    <label>Test nomi</label><input name="title" required>
-    <label>Test kodi (bo‘sh qoldirilsa avtomatik yaratiladi)</label><input name="code">
-    <label>Davomiyligi (daqiqa)</label><input name="duration" type="number" min="1" max="240" value="30" required>
-    <label>Savollar — har qatorda: Savol|A|B|C|D|To‘g‘ri javob (A/B/C/D)</label>
-    <textarea name="questions" rows="8" required placeholder="O‘zbekiston poytaxti?|Toshkent|Samarqand|Buxoro|Xiva|A"></textarea>
-    <button>Test yaratish</button></form><hr><h2>Mavjud testlar</h2>
-    {% for t in tests %}<p><b>{{t['title']}}</b> · Kod: <b>{{t['code']}}</b> · {{t['duration']}} daqiqa</p>{% else %}<p>Hozircha test yo‘q.</p>{% endfor %}
-    <hr><h2>Oxirgi natijalar</h2>{% for r in results %}<p>{{r['full_name']}} — {{r['title']}} — {{r['percent']}}% · {{r['cert_id']}}</p>{% else %}<p>Natijalar hali yo‘q.</p>{% endfor %}
-    <a class="btn" href="/admin/logout">Chiqish</a></section>
+    return page("Admin panel", """
+    <section class="card"><p class="eyebrow">NEURON ADMINISTRATORI</p><h1>Testlarni boshqarish</h1>
+    <p class="muted">Test savollari fayl ko‘rinishida yuklanadi. O‘quvchi faylni ko‘rib, Mini App’da javoblarni belgilaydi.</p>
+    <form method="post" action="/admin/create" enctype="multipart/form-data">
+    <div class="grid"><div><label>Test nomi</label><input name="title" required placeholder="Masalan: Tarix — 1-bosqich"></div>
+    <div><label>Test kodi (ixtiyoriy)</label><input name="code" placeholder="Avtomatik yaratiladi"></div>
+    <div><label>Davomiyligi (daqiqada)</label><input name="duration" type="number" min="1" max="240" value="30" required></div>
+    <div><label>Savollar soni</label><input name="question_count" type="number" min="1" max="200" required placeholder="Masalan: 25"></div></div>
+    <label>Test fayli (PDF yoki DOCX, 15 MB gacha)</label><div class="filebox">📎 <b>Test hujjatini yuklang</b><input type="file" name="test_file" accept=".pdf,.docx" required></div>
+    <h2 style="margin-top:20px">Javoblar kaliti</h2><p class="muted">Har bir savol javobini vergul bilan ajrating. Masalan: A,B,C,D,A yoki TRUE,FALSE. Qisqa yopiq javoblar uchun ham aniq javob matnini kiriting.</p>
+    <label>To‘g‘ri javoblar (1-savoldan boshlab)</label><textarea name="answer_key" rows="4" required placeholder="A,B,C,D,A,TRUE,FALSE"></textarea>
+    <button class="full">＋ Testni yaratish</button></form></section>
+    <section class="card"><h2>Mavjud testlar</h2>{% for t in tests %}<div class="question"><b>{{t['title']}}</b><p class="muted">Kod: {{t['code']}} · {{t['question_count']}} savol · {{t['duration']}} daqiqa · {{t['file_name'] or 'Eski test'}}</p></div>{% else %}<p class="muted">Hozircha test yo‘q.</p>{% endfor %}</section>
+    <section class="card"><h2>Oxirgi natijalar</h2>{% for r in results %}<p>{{r['full_name']}} — {{r['title']}} — <b>{{r['percent']}}%</b> · {{r['cert_id']}}</p>{% else %}<p class="muted">Natijalar hali yo‘q.</p>{% endfor %}<a class="btn dark" href="/admin/logout">Chiqish</a></section>
     """,tests=tests,results=results)
 
 @app.post("/admin/create")
 @admin_required
 def create_test():
     title=request.form.get("title","").strip()
-    questions=request.form.get("questions","").strip()
     duration=max(1,min(240,int(request.form.get("duration",30))))
+    count=int(request.form.get("question_count",0))
+    raw_key=request.form.get("answer_key","").strip()
+    uploaded=request.files.get("test_file")
+    if not title or count<1 or count>200 or not uploaded or not uploaded.filename:
+        flash("Barcha maydonlarni to‘ldiring va PDF yoki DOCX fayl yuklang."); return redirect(url_for("dashboard"))
+    filename=secure_filename(uploaded.filename)
+    ext=filename.rsplit(".",1)[-1].lower() if "." in filename else ""
+    if ext not in ("pdf","docx"):
+        flash("Faqat PDF yoki DOCX fayl qabul qilinadi."); return redirect(url_for("dashboard"))
+    data=uploaded.read()
+    if not data or len(data)>15*1024*1024:
+        flash("Fayl bo‘sh yoki 15 MB dan katta."); return redirect(url_for("dashboard"))
+    answers=[x.strip() for x in raw_key.replace("\n",",").replace(";",",").split(",") if x.strip()]
+    if len(answers)!=count:
+        flash(f"Savollar soni {count}, javoblar kaliti esa {len(answers)} ta. Ikkalasini teng qiling."); return redirect(url_for("dashboard"))
+    allowed={"A","B","C","D","TRUE","FALSE","TO‘G‘RI","NOTO‘G‘RI"}
+    if any(a.upper() not in allowed and len(a)>80 for a in answers):
+        flash("Javob kalitidagi matn juda uzun."); return redirect(url_for("dashboard"))
     code=request.form.get("code","").strip().upper() or "".join(secrets.choice(string.ascii_uppercase+string.digits) for _ in range(6))
-    valid=[x.split("|") for x in questions.splitlines() if x.strip()]
-    if not title or not valid or any(len(q)!=6 or q[5].strip().upper() not in "ABCD" for q in valid):
-        flash("Savollar formati xato. Har qatorda 6 ta qism va oxirida A/B/C/D bo‘lishi kerak.")
-        return redirect(url_for("dashboard"))
     try:
-        with db() as c: c.execute("INSERT INTO tests(title,code,duration,questions,created_at) VALUES(?,?,?,?,?)",(title,code,duration,questions,datetime.utcnow().isoformat()))
-        flash("Test yaratildi. Kod: "+code)
+        with db() as c:
+            c.execute("INSERT INTO tests(title,code,duration,questions,created_at,file_name,file_data,answer_key,question_count) VALUES(?,?,?,?,?,?,?,?,?)",
+            (title,code,duration,"",datetime.utcnow().isoformat(),filename,data,json.dumps(answers,ensure_ascii=False),count))
+        flash("Test muvaffaqiyatli yaratildi. Test kodi: "+code)
     except sqlite3.IntegrityError: flash("Bu test kodi band. Boshqa kod kiriting.")
     return redirect(url_for("dashboard"))
 
 @app.get("/admin/logout")
 def logout():
-    session.clear(); return redirect(url_for("home"))
+    session.clear(); return redirect(url_for("admin_login"))
 
-init_db()
+# Telegram webhook integration
+BOT_TOKEN=os.environ.get("BOT_TOKEN","").strip()
+MINI_APP_URL=os.environ.get("MINI_APP_URL","https://mirzayev-group.onrender.com").strip()
+TELEGRAM_WEBHOOK_SECRET=hashlib.sha256((os.environ.get("SECRET_KEY","change-this-before-production")+":telegram-webhook").encode()).hexdigest()[:40]
 
-
-# Telegram bot: webhook integration for the test Mini App
-import json
-import hashlib
-import urllib.request
-import urllib.error
-
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
-MINI_APP_URL = os.environ.get("MINI_APP_URL", "https://mirzayev-group.onrender.com").strip()
-TELEGRAM_WEBHOOK_SECRET = hashlib.sha256((os.environ.get("SECRET_KEY", "change-this-before-production") + ":telegram-webhook").encode()).hexdigest()[:40]
-
-def telegram_api(method, payload):
-    if not BOT_TOKEN:
-        return None
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/{method}",
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=12) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-def register_telegram_webhook():
-    if not BOT_TOKEN:
-        app.logger.warning("Telegram bot disabled: BOT_TOKEN is not configured.")
-        return
-    try:
-        result = telegram_api("setWebhook", {
-            "url": "https://mirzayev-group.onrender.com/telegram/webhook",
-            "secret_token": TELEGRAM_WEBHOOK_SECRET,
-            "allowed_updates": ["message"],
-            "drop_pending_updates": False,
-        })
-        app.logger.info("Telegram webhook registration: %s", result)
-    except Exception:
-        app.logger.exception("Telegram webhook registration failed")
+def telegram_api(method,payload):
+    if not BOT_TOKEN: return None
+    req=urllib.request.Request(f"https://api.telegram.org/bot{BOT_TOKEN}/{method}",data=json.dumps(payload).encode(),headers={"Content-Type":"application/json"},method="POST")
+    with urllib.request.urlopen(req,timeout=12) as response: return json.loads(response.read().decode())
 
 @app.post("/telegram/webhook")
 def telegram_webhook():
-    if not BOT_TOKEN:
-        return {"ok": False, "error": "bot_not_configured"}, 503
-    supplied_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-    if not secrets.compare_digest(supplied_secret, TELEGRAM_WEBHOOK_SECRET):
-        abort(403)
-    update = request.get_json(silent=True) or {}
-    message = update.get("message") or {}
-    chat = message.get("chat") or {}
-    text_message = (message.get("text") or "").strip()
-    chat_id = chat.get("id")
-    if not chat_id:
-        return {"ok": True}
-    if text_message.startswith("/start"):
-        keyboard = {
-            "inline_keyboard": [[{
-                "text": "🚀 Testni boshlash",
-                "web_app": {"url": MINI_APP_URL}
-            }]]
-        }
-        first_name = (message.get("from") or {}).get("first_name") or "foydalanuvchi"
-        telegram_api("sendMessage", {
-            "chat_id": chat_id,
-            "text": (
-                f"Assalomu alaykum, {first_name}! 👋\n\n"
-                "📚 Onlayn test platformasiga xush kelibsiz.\n"
-                "Testni boshlash uchun quyidagi tugmani bosing. "
-                "Natijangizdan so‘ng sertifikatingizni olishingiz mumkin."
-            ),
-            "reply_markup": keyboard,
-        })
-    elif text_message == "/help":
-        telegram_api("sendMessage", {
-            "chat_id": chat_id,
-            "text": "Yordam: test platformasini ochish uchun /start buyrug‘ini yuboring."
-        })
-    return {"ok": True}
+    if not BOT_TOKEN: return {"ok":False,"error":"bot_not_configured"},503
+    if not secrets.compare_digest(request.headers.get("X-Telegram-Bot-Api-Secret-Token",""),TELEGRAM_WEBHOOK_SECRET): abort(403)
+    update=request.get_json(silent=True) or {}; message=update.get("message") or {}; chat=message.get("chat") or {}; msg=(message.get("text") or "").strip(); chat_id=chat.get("id")
+    if not chat_id: return {"ok":True}
+    if msg.startswith("/start"):
+        telegram_api("sendMessage",{"chat_id":chat_id,"text":"Assalomu alaykum! 👋\nNEURON onlayn test platformasiga xush kelibsiz. Testni boshlash uchun tugmani bosing.","reply_markup":{"inline_keyboard":[[{"text":"🚀 Testni boshlash","web_app":{"url":MINI_APP_URL}}]]}})
+    elif msg=="/help": telegram_api("sendMessage",{"chat_id":chat_id,"text":"Test platformasini ochish uchun /start buyrug‘ini yuboring."})
+    return {"ok":True}
 
 @app.get("/telegram/status")
 def telegram_status():
-    return {
-        "bot_configured": bool(BOT_TOKEN),
-        "mini_app_url": MINI_APP_URL,
-        "webhook_path": "/telegram/webhook",
-    }
+    return {"bot_configured":bool(BOT_TOKEN),"mini_app_url":MINI_APP_URL,"webhook_path":"/telegram/webhook"}
 
-# Register once when the Render web process starts.
+def register_telegram_webhook():
+    if not BOT_TOKEN: app.logger.warning("BOT_TOKEN is not configured."); return
+    try:
+        result=telegram_api("setWebhook",{"url":"https://mirzayev-group.onrender.com/telegram/webhook","secret_token":TELEGRAM_WEBHOOK_SECRET,"allowed_updates":["message"]})
+        app.logger.info("Telegram webhook registration: %s",result)
+    except Exception: app.logger.exception("Telegram webhook registration failed")
+
+init_db()
 register_telegram_webhook()
