@@ -383,6 +383,12 @@ def submit_test(test_id):
     session.pop("candidate",None); session.pop("started_at",None); session.pop("test_deadline",None)
     return redirect(url_for("certificate", cert_id=cert))
 
+@app.get("/certificate/<cert_id>/image")
+def certificate_image_route(cert_id):
+    pic=certificate_image(cert_id)
+    if not pic: abort(404)
+    return send_file(pic,mimetype="image/png",download_name=f"NEURON_{cert_id}.png")
+
 @app.get("/certificate/<cert_id>")
 def certificate(cert_id):
     with db() as c: r=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id WHERE cert_id=?", (cert_id,)).fetchone()
@@ -391,7 +397,7 @@ def certificate(cert_id):
     return page("Natija va sertifikat", """
     <section class="card result-card"><p class="eyebrow">NEURON NATIJA</p><h1>{{r['full_name']}}</h1><p class="muted">{{r['title']}}</p>
     <div class="stat"><b>{{r['score']}} / {{r['total']}}</b>{{r['percent']}}% avtomatik baholangan natija</div><h2>{{level}}</h2>
-    {% if r['review_status']=='pending' or r['focus_warning']|int >= 2 %}<p class="muted">O‘qituvchi tekshiruvi tugagach sertifikat yuklab olish ochiladi.</p>{% else %}<p class="muted">Sertifikat ID: {{r['cert_id']}}</p><a class="btn full" href="{{url_for('certificate_pdf',cert_id=r['cert_id'])}}">⬇ Sertifikatni PDF yuklab olish</a><p class="muted">Sertifikatni tekshirish: {{request.host_url}}certificate/{{r['cert_id']}}</p>{% endif %}</section>
+    {% if r['review_status']=='pending' or r['focus_warning']|int >= 2 %}<p class="muted">O‘qituvchi tekshiruvi tugagach sertifikat yuklab olish ochiladi.</p>{% else %}<p class="muted">Sertifikat ID: {{r['cert_id']}}</p><a class="btn full" href="{{url_for('certificate_pdf',cert_id=r['cert_id'])}}">⬇ Sertifikatni PDF yuklab olish</a><p class="muted">Sertifikatni tekshirish: {{request.host_url}}certificate/{{r['cert_id']}}</p><img src="{{url_for('certificate_image_route',cert_id=r['cert_id'])}}" alt="NEURON sertifikati" style="display:block;width:100%;height:auto;border-radius:12px;border:1px solid #e6d6a6;margin:16px 0"><a class="btn secondary full" href="{{url_for('certificate_image_route',cert_id=r['cert_id'])}}">⬇ PNG sertifikatni yuklab olish</a>{% endif %}</section>
     """,r=r,level=level)
 
 @app.get("/certificate/<cert_id>/pdf")
@@ -673,7 +679,7 @@ def teacher_grant_certificate(result_id):
         c.execute("UPDATE results SET certificate_approved=TRUE WHERE id=?",(result_id,))
         cert=r["cert_id"]
     sent=deliver_certificate(cert)
-    flash("Sertifikat rasm ko‘rinishida Telegram chatiga yuborildi." if sent else "Sertifikatga ruxsat saqlandi, ammo Telegramga yuborilmadi. BOT_TOKEN va o‘qituvchi chatini tekshiring.")
+    flash("Sertifikatga ruxsat saqlandi. PNG va PDF natija sahifasida tayyor.")
     return redirect(url_for("teacher_cabinet"))
 
 @app.route("/teacher/review/<int:result_id>",methods=["GET","POST"])
@@ -694,7 +700,7 @@ def teacher_review(result_id):
         else: cert=""
     if request.method=="POST":
         deliver_certificate(cert)
-        flash("Baholash saqlandi. Sertifikat tayyor bo‘lsa Telegram o‘qituvchi chatiga yuborildi.")
+        flash("Baholash saqlandi. Sertifikat tayyor bo‘lsa, natija sahifasida PNG va PDF ko‘rinadi.")
         return redirect(url_for("teacher_cabinet"))
     return page("Yopiq savollar", """<section class="card"><h1>Yopiq savollarni tekshirish</h1>{% for item in items %}<div class="question"><b>{{item['question']}}-savol</b><p>{{item['answer'] or 'Javob yo‘q'}}</p><label>Baholash</label><select name="manual_score_{{loop.index0}}" form="review"><option value="0">0 — noto‘g‘ri</option><option value="0.5">0.5 — qisman</option><option value="1">1 — to‘g‘ri</option></select></div>{% endfor %}<form id="review" method="post"><button class="full">Baholashni saqlash</button></form></section>""",items=items)
 
@@ -828,20 +834,11 @@ def certificate_image(cert_id):
 
     out=io.BytesIO(); im.save(out,format="PNG",dpi=(180,180)); out.seek(0); return out
 def deliver_certificate(cert_id):
-    with db() as c: approved=c.execute("SELECT certificate_approved FROM results WHERE cert_id=?",(cert_id,)).fetchone()
-    if not approved or not approved["certificate_approved"]: return False
-    pic=certificate_image(cert_id)
-    if not pic or not BOT_TOKEN: return False
-    with db() as c: chats=[r["chat_id"] for r in c.execute("SELECT chat_id FROM teacher_accounts WHERE status='approved'").fetchall()]
-    # Multipart upload for Telegram photo endpoint
-    boundary="----Neuron"+secrets.token_hex(12); payload=pic.getvalue(); sent=False
-    for chat_id in chats:
-        try:
-            body=(f"--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{chat_id}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n🏅 NEURON sertifikati · {cert_id}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"certificate.png\"\r\nContent-Type: image/png\r\n\r\n").encode()+payload+f"\r\n--{boundary}--\r\n".encode()
-            req=urllib.request.Request(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",data=body,headers={"Content-Type":"multipart/form-data; boundary="+boundary})
-            with urllib.request.urlopen(req,timeout=20) as response: sent=sent or json.loads(response.read().decode()).get("ok",False)
-        except Exception: app.logger.exception("Certificate image Telegram delivery failed")
-    return sent
+    # Student Telegram chat_id is not stored in results yet.
+    # Never broadcast a student's certificate to every approved teacher.
+    with db() as c:
+        r=c.execute("SELECT certificate_approved,review_status,focus_warning FROM results WHERE cert_id=?",(cert_id,)).fetchone()
+    return bool(r and r["certificate_approved"] and r["review_status"]!="pending" and int(r["focus_warning"] or 0)<2)
 
 @app.post("/telegram/webhook")
 def telegram_webhook():
