@@ -930,12 +930,48 @@ def certificate_image(cert_id):
     d.text((1290,1098),"Mas'ul rahbar",font=font(15),fill=muted,anchor="mm")
 
     out=io.BytesIO(); im.save(out,format="PNG",dpi=(180,180)); out.seek(0); return out
+def telegram_user_chat_id(init_data):
+    if not BOT_TOKEN or not init_data: return None
+    try:
+        from urllib.parse import parse_qsl
+        pairs=dict(parse_qsl(init_data,keep_blank_values=True))
+        received=pairs.pop("hash",None)
+        if not received: return None
+        check_string="\n".join(f"{k}={v}" for k,v in sorted(pairs.items()))
+        secret=hmac.new(b"WebAppData",BOT_TOKEN.encode(),hashlib.sha256).digest()
+        calculated=hmac.new(secret,check_string.encode(),hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(calculated,received): return None
+        auth_date=int(pairs.get("auth_date","0"))
+        if abs(int(datetime.utcnow().timestamp())-auth_date)>86400: return None
+        user=json.loads(pairs.get("user","{}"))
+        return str(user.get("id")) if user.get("id") else None
+    except Exception:
+        app.logger.exception("Telegram WebApp initData validation failed")
+        return None
+
 def deliver_certificate(cert_id):
-    # Student Telegram chat_id is not stored in results yet.
-    # Never broadcast a student's certificate to every approved teacher.
     with db() as c:
-        r=c.execute("SELECT certificate_approved,review_status,focus_warning FROM results WHERE cert_id=?",(cert_id,)).fetchone()
-    return bool(r and r["certificate_approved"] and r["review_status"]!="pending" and int(r["focus_warning"] or 0)<2)
+        r=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id WHERE results.cert_id=?",(cert_id,)).fetchone()
+    if not r or not r["student_chat_id"] or not r["certificate_approved"] or r["review_status"]=="pending" or int(r["focus_warning"] or 0)>=2:
+        return False
+    if not BOT_TOKEN: return False
+    try:
+        pic=certificate_image(cert_id)
+        if not pic: return False
+        boundary="----NEURON"+secrets.token_hex(12)
+        caption=("🏅 NEURON sertifikati\n\n👤 "+r["full_name"]+"\n📝 "+r["title"]+"\n🎯 "+str(r["score"])+"/"+str(r["total"])+" ("+str(r["percent"])+"%)\n🆔 "+cert_id+"\n\n🔎 Sertifikatni tekshirish: https://mirzayev-group.onrender.com/certificate/"+cert_id)
+        chunks=[]
+        for name,value in [("chat_id",str(r["student_chat_id"])),("caption",caption)]:
+            chunks.extend([("--"+boundary+"\r\n").encode(),('Content-Disposition: form-data; name="'+name+'"\r\n\r\n').encode(),str(value).encode("utf-8"),b"\r\n"])
+        chunks.extend([("--"+boundary+"\r\n").encode(),('Content-Disposition: form-data; name="photo"; filename="NEURON_'+cert_id+'.png"\r\n').encode(),b"Content-Type: image/png\r\n\r\n",pic.getvalue(),b"\r\n",("--"+boundary+"--\r\n").encode()])
+        req=urllib.request.Request("https://api.telegram.org/bot"+BOT_TOKEN+"/sendPhoto",data=b"".join(chunks),headers={"Content-Type":"multipart/form-data; boundary="+boundary},method="POST")
+        with urllib.request.urlopen(req,timeout=25) as response:
+            result=json.loads(response.read().decode("utf-8"))
+        if not result.get("ok"): app.logger.error("Telegram sendPhoto failed: %s",result)
+        return bool(result.get("ok"))
+    except Exception:
+        app.logger.exception("Student certificate Telegram delivery failed")
+        return False
 
 @app.post("/telegram/webhook")
 def telegram_webhook():
