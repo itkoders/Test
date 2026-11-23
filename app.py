@@ -187,3 +187,92 @@ def logout():
     session.clear(); return redirect(url_for("home"))
 
 init_db()
+
+
+# Telegram bot: webhook integration for the test Mini App
+import json
+import hashlib
+import urllib.request
+import urllib.error
+
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+MINI_APP_URL = os.environ.get("MINI_APP_URL", "https://mirzayev-group.onrender.com").strip()
+TELEGRAM_WEBHOOK_SECRET = hashlib.sha256((os.environ.get("SECRET_KEY", "change-this-before-production") + ":telegram-webhook").encode()).hexdigest()[:40]
+
+def telegram_api(method, payload):
+    if not BOT_TOKEN:
+        return None
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/{method}",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=12) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+def register_telegram_webhook():
+    if not BOT_TOKEN:
+        app.logger.warning("Telegram bot disabled: BOT_TOKEN is not configured.")
+        return
+    try:
+        result = telegram_api("setWebhook", {
+            "url": "https://mirzayev-group.onrender.com/telegram/webhook",
+            "secret_token": TELEGRAM_WEBHOOK_SECRET,
+            "allowed_updates": ["message"],
+            "drop_pending_updates": False,
+        })
+        app.logger.info("Telegram webhook registration: %s", result)
+    except Exception:
+        app.logger.exception("Telegram webhook registration failed")
+
+@app.post("/telegram/webhook")
+def telegram_webhook():
+    if not BOT_TOKEN:
+        return {"ok": False, "error": "bot_not_configured"}, 503
+    supplied_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not secrets.compare_digest(supplied_secret, TELEGRAM_WEBHOOK_SECRET):
+        abort(403)
+    update = request.get_json(silent=True) or {}
+    message = update.get("message") or {}
+    chat = message.get("chat") or {}
+    text_message = (message.get("text") or "").strip()
+    chat_id = chat.get("id")
+    if not chat_id:
+        return {"ok": True}
+    if text_message.startswith("/start"):
+        keyboard = {
+            "inline_keyboard": [[{
+                "text": "🚀 Testni boshlash",
+                "web_app": {"url": MINI_APP_URL}
+            }]]
+        }
+        first_name = (message.get("from") or {}).get("first_name") or "foydalanuvchi"
+        telegram_api("sendMessage", {
+            "chat_id": chat_id,
+            "text": (
+                f"Assalomu alaykum, {first_name}! 👋\\n\\n"
+                "📚 Onlayn test platformasiga xush kelibsiz.\\n"
+                "Testni boshlash uchun quyidagi tugmani bosing. "
+                "Natijangizdan so‘ng sertifikatingizni olishingiz mumkin."
+            ),
+            "reply_markup": keyboard,
+        })
+    elif text_message == "/help":
+        telegram_api("sendMessage", {
+            "chat_id": chat_id,
+            "text": "Yordam: test platformasini ochish uchun /start buyrug‘ini yuboring."
+        })
+    return {"ok": True}
+
+@app.get("/telegram/status")
+def telegram_status():
+    return {
+        "bot_configured": bool(BOT_TOKEN),
+        "mini_app_url": MINI_APP_URL,
+        "webhook_path": "/telegram/webhook",
+    }
+
+# Register once when the Render web process starts.
+register_telegram_webhook()
