@@ -31,6 +31,11 @@ def init_db():
         for name, typ in [("file_name","TEXT"),("file_data","BLOB"),("answer_key","TEXT"),("question_count","INTEGER NOT NULL DEFAULT 0"),("manual_answers","TEXT"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0")]:
             if name not in cols:
                 c.execute(f"ALTER TABLE tests ADD COLUMN {name} {typ}")
+        # Safe migration for existing databases created before manual review fields existed.
+        result_cols = {r["name"] for r in c.execute("PRAGMA table_info(results)").fetchall()}
+        for name, typ in [("manual_answers","TEXT NOT NULL DEFAULT '[]'"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0")]:
+            if name not in result_cols:
+                c.execute(f"ALTER TABLE results ADD COLUMN {name} {typ}")
 
 BASE = """
 <!doctype html><html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -104,13 +109,13 @@ def take_test(test_id):
     <div class="grid"><section class="card"><p class="eyebrow">TEST TOPSHIRISH</p><h1>{{test['title']}}</h1>
     <p class="muted">{{candidate['name']}} · {{count}} ta savol</p><div class="timer">⏱ Qolgan vaqt: <span id="clock">{{test['duration']}}:00</span></div>
     <p class="muted">Savollarni hujjatdan o‘qing. Javoblarni o‘ng/ pastdagi bo‘limda belgilang.</p>
-    {% if test['file_name'] %}<a class="btn secondary full" href="/testfile/{{test['id']}}" target="_blank">📄 Test faylini ko‘rish</a>{% endif %}
+    {% if test['file_name'] %}<a id="testFileLink" class="btn secondary full" href="/testfile/{{test['id']}}" target="_blank" rel="noopener">📄 Test faylini ko‘rish</a>{% endif %}
     </section><section class="card"><h2>Javoblar varaqasi</h2><p class="muted">Har bir savol uchun variantni bosing. Yopiq savollarga yozma javob kiriting.</p><form id="answerForm" method="post" action="/submit/{{test['id']}}">
     {% for i in range(1,count+1) %}<div class="question"><div class="answer-row"><div class="qnum">{{i}}</div><div><b>{{i}}-savol</b><div class="bubbles">
     {% for v in ['A','B','C','D'] %}<label class="bubble"><input type="radio" name="q{{i}}" value="{{v}}"><span>{{v}}</span></label>{% endfor %}
     </div><input name="q{{i}}_text" placeholder="Yopiq savol: javobni shu yerga yozing" aria-label="{{i}}-savol yozma javobi"></div></div></div>{% endfor %}
     <button class="full" type="submit">Testni yakunlash ✓</button></form></section></section></div>
-    <script>let left={{test['duration']}}*60;const el=document.getElementById('clock');const form=document.getElementById('answerForm');function tick(){let m=Math.floor(left/60),s=left%60;el.textContent=m+':'+String(s).padStart(2,'0');if(left<=0){form.submit();return;}left--;}let focusWarning=false;document.addEventListener("visibilitychange",()=>{if(document.hidden){focusWarning=true;alert("Diqqat: test oynasidan chiqdingiz. Bu holat o‘qituvchiga qayd etiladi.");}});form.addEventListener("submit",function(){if(focusWarning){const h=document.createElement("input");h.type="hidden";h.name="focus_warning";h.value="1";form.appendChild(h);}});tick();setInterval(tick,1000);</script>
+    <script>let left={{test['duration']}}*60;const el=document.getElementById('clock');const form=document.getElementById('answerForm');function tick(){let m=Math.floor(left/60),s=left%60;el.textContent=m+':'+String(s).padStart(2,'0');if(left<=0){form.submit();return;}left--;}let focusWarning=false;let openingTestFile=false;const fileLink=document.getElementById("testFileLink");if(fileLink){fileLink.addEventListener("click",()=>{openingTestFile=true;});}document.addEventListener("visibilitychange",()=>{if(document.hidden){if(openingTestFile){return;}focusWarning=true;alert("Diqqat: test oynasidan chiqdingiz. Bu holat o‘qituvchiga qayd etiladi.");}else if(openingTestFile){openingTestFile=false;}});form.addEventListener("submit",function(){if(focusWarning){const h=document.createElement("input");h.type="hidden";h.name="focus_warning";h.value="1";form.appendChild(h);}});tick();setInterval(tick,1000);</script>
     """,test=test,candidate=candidate,count=count)
 
 @app.get("/testfile/<int:test_id>")
