@@ -38,7 +38,10 @@ def init_db():
         for name, typ in [("manual_answers","TEXT NOT NULL DEFAULT '[]'"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0")]:
             if name not in result_cols:
                 c.execute(f"ALTER TABLE results ADD COLUMN {name} {typ}")
-        c.execute("""CREATE TABLE IF NOT EXISTS teacher_accounts(telegram_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, full_name TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', stage TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS teacher_accounts(telegram_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, full_name TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', stage TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, username TEXT, password_hash TEXT)""")
+        tc={r["name"] for r in c.execute("PRAGMA table_info(teacher_accounts)").fetchall()}
+        for n,t in [("username","TEXT"),("password_hash","TEXT")]:
+            if n not in tc: c.execute(f"ALTER TABLE teacher_accounts ADD COLUMN {n} {t}")
 
 BASE = """
 <!doctype html><html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -230,7 +233,6 @@ def admin_login():
 def dashboard():
     with db() as c:
         tests=c.execute("SELECT * FROM tests ORDER BY id DESC").fetchall()
-        teachers=c.execute("SELECT * FROM teacher_accounts ORDER BY created_at DESC").fetchall()
         raw_results=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id ORDER BY results.id DESC LIMIT 100").fetchall()
     results=[]
     for item in raw_results:
@@ -239,7 +241,7 @@ def dashboard():
         except Exception: item["manual_items"]=[]
         results.append(item)
     return page("Admin panel", """
-    <section class="card"><p class="eyebrow">NEURON ADMINISTRATORI</p><h1>Testlarni boshqarish</h1>
+    <section class="card"><p class="eyebrow">NEURON ADMINISTRATORI</p><h1>Testlarni boshqarish</h1><a class="btn secondary" href="/admin/teachers">👩‍🏫 O‘qituvchilarni boshqarish</a>
     <p class="muted">Test savollari fayl ko‘rinishida yuklanadi. O‘quvchi faylni ko‘rib, Mini App’da javoblarni belgilaydi.</p>
     <form method="post" action="/admin/create" enctype="multipart/form-data">
     <div class="grid"><div><label>Test nomi</label><input name="title" required placeholder="Masalan: Tarix — 1-bosqich"></div>
@@ -289,10 +291,9 @@ def dashboard():
     }
     countInput.addEventListener('input',drawKeys);drawKeys();
     </script>
-    <section class="card"><h2>O‘qituvchilar ro‘yxati</h2>{% for t in teachers %}<div class="question"><b>{{t['full_name']}}</b> — {{t['subject']}}<p>📞 {{t['phone']}} · {{t['status']}}</p>{% if t['status']=='pending' %}<form method="post" action="/admin/teacher/{{t['telegram_id']}}/approve"><button>Tasdiqlash</button></form><form method="post" action="/admin/teacher/{{t['telegram_id']}}/reject"><button class="secondary">Rad etish</button></form>{% endif %}</div>{% else %}<p>Arizalar yo‘q.</p>{% endfor %}</section>
     <section class="card"><h2>Mavjud testlar</h2>{% for t in tests %}<div class="question"><b>{{t['title']}}</b><p class="muted">Kod: {{t['code']}} · {{t['question_count']}} savol · {{t['duration']}} daqiqa · {{t['file_name'] or 'Eski test'}}</p></div>{% else %}<p class="muted">Hozircha test yo‘q.</p>{% endfor %}</section>
     <section class="card"><h2>Natijalar va tekshiruvlar</h2>{% for r in results %}<div class="question"><p><b>{{r['full_name']}}</b> — {{r['title']}} — <b>{{r['percent']}}%</b></p><p class="muted">Holat: {{'Tekshiruv kutilmoqda' if r['review_status']=='pending' else 'Sertifikat tayyor' if r['review_status']=='checked' else r['review_status']}} · ID: {{r['cert_id']}}</p>{% if r['focus_warning']|int >= 2 %}<p><b>⚠️ Test bloklangan: {{r['focus_warning']}} ogohlantirish.</b></p><form method="post" action="/admin/clearflag/{{r['id']}}"><button class="secondary">Blokni bekor qilish</button></form>{% endif %}{% if r['review_status']=='pending' %}<form method="post" action="/admin/review/{{r['id']}}"><h3>Yopiq savollar — rubrika</h3>{% for item in r['manual_items'] %}<div class="filebox"><b>{{item['question']}}-savol</b><p>{{item['answer'] or 'Javob kiritilmagan'}}</p><label>Baholash (1 ballik mezon)</label><select name="manual_score_{{loop.index0}}"><option value="0">Noto‘g‘ri — 0</option><option value="0.5">Qisman — 0.5</option><option value="1">To‘g‘ri — 1</option></select></div>{% endfor %}<button>Baholashni saqlash</button></form>{% endif %}</div>{% else %}<p>Natijalar yo‘q.</p>{% endfor %}<a class="btn dark" href="/admin/logout">Chiqish</a></section>
-    """,tests=tests,results=results,teachers=teachers)
+    """,tests=tests,results=results)
 
 @app.post("/admin/create")
 @admin_required
@@ -358,14 +359,25 @@ def clear_test_flag(result_id):
     flash("Test blokidan chiqarildi.")
     return redirect(url_for("dashboard"))
 
+@app.get("/admin/teachers")
+@admin_required
+def admin_teachers():
+    with db() as c: teachers=c.execute("SELECT * FROM teacher_accounts ORDER BY created_at DESC").fetchall()
+    return page("O‘qituvchilar", """<section class="card"><p class="eyebrow">NEURON ADMIN</p><h1>O‘qituvchilar</h1><p class="muted">Bu bo‘lim test yaratish va test natijalari panelidan alohida ishlaydi.</p>{% for t in teachers %}<div class="question"><b>{{t['full_name'] or 'Ma’lumot kutilmoqda'}}</b> — {{t['subject']}}<p class="muted">📞 {{t['phone']}} · Telegram: {{t['telegram_id']}} · Holat: {{t['status']}}</p>{% if t['status']=='pending' and t['full_name'] %}<form method="post" action="/admin/teacher/{{t['telegram_id']}}/approve"><button class="full">✅ Tasdiqlash va login/parol berish</button></form><form method="post" action="/admin/teacher/{{t['telegram_id']}}/reject"><button class="secondary full">Rad etish</button></form>{% endif %}</div>{% else %}<p class="muted">Arizalar yo‘q.</p>{% endfor %}<a class="btn dark" href="/admin/dashboard">Testlar paneliga qaytish</a></section>""",teachers=teachers)
+
 @app.post("/admin/teacher/<telegram_id>/approve")
 @admin_required
 def approve_teacher(telegram_id):
+    username="teach_"+secrets.token_hex(3)
+    password=secrets.token_urlsafe(9)
+    pwh=hashlib.pbkdf2_hmac("sha256",password.encode(),b"neuron-teacher-v1",180000).hex()
     with db() as c:
-        t=c.execute("SELECT chat_id FROM teacher_accounts WHERE telegram_id=? AND status='pending'",(telegram_id,)).fetchone()
-        c.execute("UPDATE teacher_accounts SET status='approved',stage='' WHERE telegram_id=?",(telegram_id,))
-    if t: telegram_api("sendMessage",{"chat_id":t["chat_id"],"text":"✅ O‘qituvchi arizangiz tasdiqlandi."})
-    flash("O‘qituvchi holati yangilandi."); return redirect(url_for("dashboard"))
+        t=c.execute("SELECT chat_id,full_name,status FROM teacher_accounts WHERE telegram_id=?",(telegram_id,)).fetchone()
+        if not t or t["status"]!="pending": flash("Kutilayotgan ariza topilmadi."); return redirect(url_for("admin_teachers"))
+        c.execute("UPDATE teacher_accounts SET status='approved',stage='',username=?,password_hash=? WHERE telegram_id=?",(username,pwh,telegram_id))
+    try: telegram_api("sendMessage",{"chat_id":t["chat_id"],"text":"🎉 Tabriklaymiz, arizangiz tasdiqlandi!\n\nNEURON o‘qituvchi kabineti\nLogin: "+username+"\nParol: "+password+"\n\nKabinet: https://mirzayev-group.onrender.com/teacher/login\nParolni xavfsiz saqlang."})
+    except Exception: app.logger.exception("Teacher credentials delivery failed")
+    flash("O‘qituvchi tasdiqlandi. Login va parol Telegram orqali yuborildi."); return redirect(url_for("admin_teachers"))
 
 @app.post("/admin/teacher/<telegram_id>/reject")
 @admin_required
@@ -373,8 +385,69 @@ def reject_teacher(telegram_id):
     with db() as c:
         t=c.execute("SELECT chat_id FROM teacher_accounts WHERE telegram_id=?",(telegram_id,)).fetchone()
         c.execute("UPDATE teacher_accounts SET status='rejected',stage='' WHERE telegram_id=?",(telegram_id,))
-    if t: telegram_api("sendMessage",{"chat_id":t["chat_id"],"text":"Arizangiz rad etildi. /teacher orqali qayta yuboring."})
-    flash("Ariza rad etildi."); return redirect(url_for("dashboard"))
+    if t: telegram_api("sendMessage",{"chat_id":t["chat_id"],"text":"Arizangiz rad etildi. Ma’lumotlarni aniqlashtirib, /teacher orqali qayta ariza yuborishingiz mumkin."})
+    flash("Ariza rad etildi."); return redirect(url_for("admin_teachers"))
+
+def teacher_required(fn):
+    @wraps(fn)
+    def wrapper(*a,**kw):
+        if not session.get("teacher_id"): return redirect(url_for("teacher_login"))
+        with db() as c: t=c.execute("SELECT * FROM teacher_accounts WHERE telegram_id=? AND status='approved'",(session["teacher_id"],)).fetchone()
+        if not t: session.pop("teacher_id",None); return redirect(url_for("teacher_login"))
+        return fn(*a,**kw)
+    return wrapper
+
+@app.route("/teacher/login",methods=["GET","POST"])
+def teacher_login():
+    if request.method=="POST":
+        username=request.form.get("username","").strip()
+        password=request.form.get("password","")
+        with db() as c: t=c.execute("SELECT * FROM teacher_accounts WHERE username=? AND status='approved'",(username,)).fetchone()
+        check=hashlib.pbkdf2_hmac("sha256",password.encode(),b"neuron-teacher-v1",180000).hex()
+        if t and t["password_hash"] and secrets.compare_digest(check,t["password_hash"]):
+            session["teacher_id"]=t["telegram_id"]; return redirect(url_for("teacher_cabinet"))
+        flash("Login yoki parol noto‘g‘ri.")
+    return page("O‘qituvchi kirish", """<section class="card"><p class="eyebrow">NEURON TEACHER</p><h1>O‘qituvchi kabineti</h1><form method="post"><label>Login</label><input name="username" required autocomplete="username"><label>Parol</label><input name="password" type="password" required autocomplete="current-password"><button class="full">Kabinetga kirish</button></form><a href="/teacher/register">Ro‘yxatdan o‘tish</a></section>""")
+
+@app.get("/teacher/register")
+def teacher_register_page():
+    return page("O‘qituvchi ro‘yxati", """<section class="card"><h1>O‘qituvchi bo‘lish</h1><p>Telegram botga o‘ting va pastdagi tugmani bosing.</p><a class="btn full" href="https://t.me/" target="_blank">Telegram botni ochish</a><p class="muted">Botda /teacher buyrug‘i orqali telefon raqamingizni tasdiqlang, ism va faningizni kiriting.</p></section>""")
+
+@app.get("/teacher/cabinet")
+@teacher_required
+def teacher_cabinet():
+    with db() as c:
+        t=c.execute("SELECT * FROM teacher_accounts WHERE telegram_id=?",(session["teacher_id"],)).fetchone()
+        rows=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id ORDER BY results.id DESC LIMIT 100").fetchall()
+    return page("O‘qituvchi kabineti", """<section class="card"><p class="eyebrow">NEURON TEACHER CABINET</p><h1>Assalomu alaykum, {{t['full_name']}}</h1><p class="muted">{{t['subject']}} · {{t['phone']}}</p><div class="grid"><div class="stat"><b>{{rows|length}}</b>Natijalar</div><div class="stat"><b>{{rows|selectattr('review_status','equalto','pending')|list|length}}</b>Tekshiruv kutilmoqda</div></div><h2>O‘quvchilar natijalari</h2>{% for r in rows %}<div class="question"><b>{{r['full_name']}}</b> — {{r['title']}}<p class="muted">{{r['score']}}/{{r['total']}} · {{r['percent']}}% · {{r['created_at']}}</p>{% if r['review_status']=='pending' %}<a class="btn secondary" href="/teacher/review/{{r['id']}}">Yopiq savollarni tekshirish</a>{% endif %}<a class="btn" href="/certificate/{{r['cert_id']}}">Sertifikat / natija</a></div>{% else %}<p>Hozircha natija yo‘q.</p>{% endfor %}<a class="btn dark" href="/teacher/logout">Chiqish</a></section>""",t=t,rows=rows)
+
+@app.route("/teacher/review/<int:result_id>",methods=["GET","POST"])
+@teacher_required
+def teacher_review(result_id):
+    with db() as c:
+        r=c.execute("SELECT * FROM results WHERE id=?",(result_id,)).fetchone()
+        if not r: abort(404)
+        try: items=json.loads(r["manual_answers"] or "[]")
+        except Exception: items=[]
+        if request.method=="POST":
+            try: got=sum(float(request.form.get(f"manual_score_{i}","0")) for i in range(len(items)))
+            except Exception: got=-1
+            if got<0 or got>len(items): flash("Baholar noto‘g‘ri."); return redirect(url_for("teacher_review",result_id=result_id))
+            final=float(r["score"])+got; percent=round(final*100/float(r["total"])) if r["total"] else 0
+            c.execute("UPDATE results SET score=?,percent=?,manual_score=?,review_status='checked' WHERE id=?",(final,percent,got,result_id))
+            cert=r["cert_id"]
+        else: cert=""
+    if request.method=="POST":
+        deliver_certificate(cert)
+        flash("Baholash saqlandi. Sertifikat tayyor bo‘lsa Telegram o‘qituvchi chatiga yuborildi.")
+        return redirect(url_for("teacher_cabinet"))
+    return page("Yopiq savollar", """<section class="card"><h1>Yopiq savollarni tekshirish</h1>{% for item in items %}<div class="question"><b>{{item['question']}}-savol</b><p>{{item['answer'] or 'Javob yo‘q'}}</p><label>Baholash</label><select name="manual_score_{{loop.index0}}" form="review"><option value="0">0 — noto‘g‘ri</option><option value="0.5">0.5 — qisman</option><option value="1">1 — to‘g‘ri</option></select></div>{% endfor %}<form id="review" method="post"><button class="full">Baholashni saqlash</button></form></section>""",items=items)
+
+@app.get("/teacher/logout")
+def teacher_logout():
+    session.pop("teacher_id",None); return redirect(url_for("teacher_login"))
+
+
 
 @app.get("/admin/logout")
 def logout():
@@ -404,11 +477,56 @@ def notify_teacher(message):
         except Exception: app.logger.exception("Teacher Telegram notification failed")
     return sent>0
 
+def certificate_image(cert_id):
+    from PIL import Image, ImageDraw, ImageFont
+    with db() as c: r=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id WHERE cert_id=?",(cert_id,)).fetchone()
+    if not r or r["review_status"]=="pending" or int(r["focus_warning"] or 0)>=2: return None
+    im=Image.new("RGB",(1400,990),"#f4f7ff"); d=ImageDraw.Draw(im)
+    d.rounded_rectangle((35,35,1365,955),radius=32,outline="#315efb",width=8,fill="#ffffff")
+    d.rounded_rectangle((65,65,1335,925),radius=24,outline="#c7d5ff",width=3)
+    f=lambda size: ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",size) if os.path.exists("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf") else ImageFont.load_default()
+    def center(y,text,font,fill): d.text((700,y),text,font=font,fill=fill,anchor="mm")
+    center(150,"NEURON",f(64),"#18336b"); center(245,"SERTIFIKAT",f(48),"#315efb")
+    center(340,"Ushbu sertifikat taqdim etiladi",f(27),"#52617a")
+    center(445,r["full_name"],f(48),"#172b55")
+    center(535,"“"+r["title"]+"” test sinovi natijasi",f(27),"#52617a")
+    center(650,f'{r["score"]} / {r["total"]}     |     {r["percent"]}%',f(42),"#18336b")
+    center(755,"Sertifikat ID: "+r["cert_id"],f(24),"#52617a")
+    center(825,"Sana: "+str(r["created_at"])[:10],f(22),"#52617a")
+    out=io.BytesIO(); im.save(out,format="PNG"); out.seek(0); return out
+
+def deliver_certificate(cert_id):
+    pic=certificate_image(cert_id)
+    if not pic or not BOT_TOKEN: return False
+    with db() as c: chats=[r["chat_id"] for r in c.execute("SELECT chat_id FROM teacher_accounts WHERE status='approved'").fetchall()]
+    for chat_id in chats:
+        try:
+            pic.seek(0); req=urllib.request.Request(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",data=__import__("urllib.parse").parse.urlencode({"chat_id":chat_id,"caption":"🏅 NEURON sertifikati · "+cert_id}).encode()+b"&photo="+b"",headers={"Content-Type":"application/x-www-form-urlencoded"})
+        except Exception: pass
+    # Multipart upload for Telegram photo endpoint
+    boundary="----Neuron"+secrets.token_hex(12); payload=pic.getvalue(); sent=False
+    for chat_id in chats:
+        try:
+            body=(f"--{boundary}\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n{chat_id}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n🏅 NEURON sertifikati · {cert_id}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"certificate.png\"\r\nContent-Type: image/png\r\n\r\n").encode()+payload+f"\r\n--{boundary}--\r\n".encode()
+            req=urllib.request.Request(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",data=body,headers={"Content-Type":"multipart/form-data; boundary="+boundary})
+            with urllib.request.urlopen(req,timeout=20) as response: sent=sent or json.loads(response.read().decode()).get("ok",False)
+        except Exception: app.logger.exception("Certificate image Telegram delivery failed")
+    return sent
+
 @app.post("/telegram/webhook")
 def telegram_webhook():
     if not BOT_TOKEN: return {"ok":False,"error":"bot_not_configured"},503
     if not secrets.compare_digest(request.headers.get("X-Telegram-Bot-Api-Secret-Token",""),TELEGRAM_WEBHOOK_SECRET): abort(403)
-    u=request.get_json(silent=True) or {}; m=u.get("message") or {}; chat=m.get("chat") or {}; sender=m.get("from") or {}
+    u=request.get_json(silent=True) or {}
+    cq=u.get("callback_query")
+    if cq:
+        data=cq.get("data",""); cqchat=(cq.get("message") or {}).get("chat") or {}; chat_id=cqchat.get("id"); uid=str((cq.get("from") or {}).get("id") or "")
+        if data=="teacher_register":
+            with db() as c: c.execute("INSERT INTO teacher_accounts(telegram_id,chat_id,stage,created_at) VALUES(?,?,'phone',?) ON CONFLICT(telegram_id) DO UPDATE SET chat_id=excluded.chat_id,stage='phone',status=CASE WHEN teacher_accounts.status='approved' THEN 'approved' ELSE 'pending' END",(uid,str(chat_id),datetime.utcnow().isoformat()))
+            telegram_api("sendMessage",{"chat_id":chat_id,"text":"👩‍🏫 O‘qituvchi sifatida ro‘yxatdan o‘tish. O‘z telefon raqamingizni tugma orqali tasdiqlang.","reply_markup":{"keyboard":[[{"text":"📱 Telefon raqamimni tasdiqlash","request_contact":True}]],"resize_keyboard":True,"one_time_keyboard":True}})
+        telegram_api("answerCallbackQuery",{"callback_query_id":cq.get("id")})
+        return {"ok":True}
+    m=u.get("message") or {}; chat=m.get("chat") or {}; sender=m.get("from") or {}
     chat_id=chat.get("id"); uid=str(sender.get("id") or ""); msg=(m.get("text") or "").strip(); contact=m.get("contact")
     if not chat_id: return {"ok":True}
     with db() as c: t=c.execute("SELECT * FROM teacher_accounts WHERE telegram_id=?",(uid,)).fetchone()
@@ -427,7 +545,7 @@ def telegram_webhook():
         with db() as c: c.execute("UPDATE teacher_accounts SET subject=?,status='pending',stage='',created_at=? WHERE telegram_id=?",(msg[:100],datetime.utcnow().isoformat(),uid))
         telegram_api("sendMessage",{"chat_id":chat_id,"text":"Arizangiz yuborildi. Admin tasdiqlashini kuting."})
     elif msg.startswith("/start"):
-        telegram_api("sendMessage",{"chat_id":chat_id,"text":"Assalomu alaykum! NEURON botiga xush kelibsiz. O‘qituvchi bo‘lish uchun /teacher buyrug‘ini yuboring.","reply_markup":{"inline_keyboard":[[{"text":"🚀 Testni boshlash","web_app":{"url":MINI_APP_URL}}]]}})
+        telegram_api("sendMessage",{"chat_id":chat_id,"text":"Assalomu alaykum! NEURON botiga xush kelibsiz. O‘qituvchi bo‘lish uchun /teacher buyrug‘ini yuboring.","reply_markup":{"inline_keyboard":[[{"text":"🚀 Testni boshlash","web_app":{"url":MINI_APP_URL}}],[{"text":"👩‍🏫 O‘qituvchi sifatida ro‘yxatdan o‘tish","callback_data":"teacher_register"}]]}})
     elif msg=="/myid": telegram_api("sendMessage",{"chat_id":chat_id,"text":"Telegram ID: "+str(chat_id)})
     elif msg=="/help": telegram_api("sendMessage",{"chat_id":chat_id,"text":"/start — testni ochish\n/teacher — o‘qituvchi ro‘yxati"})
     return {"ok":True}
@@ -439,7 +557,7 @@ def telegram_status():
 def register_telegram_webhook():
     if not BOT_TOKEN: app.logger.warning("BOT_TOKEN is not configured."); return
     try:
-        result=telegram_api("setWebhook",{"url":"https://mirzayev-group.onrender.com/telegram/webhook","secret_token":TELEGRAM_WEBHOOK_SECRET,"allowed_updates":["message"]})
+        result=telegram_api("setWebhook",{"url":"https://mirzayev-group.onrender.com/telegram/webhook","secret_token":TELEGRAM_WEBHOOK_SECRET,"allowed_updates":["message","callback_query"]})
         app.logger.info("Telegram webhook registration: %s",result)
     except Exception: app.logger.exception("Telegram webhook registration failed")
 
