@@ -405,7 +405,7 @@ def certificate(cert_id):
 @app.get("/certificate/<cert_id>/pdf")
 def certificate_pdf(cert_id):
     with db() as c:
-        r=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id WHERE cert_id=?",(cert_id,)).fetchone()
+        r=c.execute("SELECT results.*,tests.title,teacher_accounts.full_name AS teacher_full_name,teacher_accounts.certificate_org_name,teacher_accounts.certificate_logo FROM results JOIN tests ON tests.id=results.test_id LEFT JOIN teacher_accounts ON teacher_accounts.telegram_id=tests.teacher_id WHERE cert_id=?",(cert_id,)).fetchone()
     if not r: abort(404)
     if r["review_status"]=="pending" or int(r["focus_warning"] or 0)>=2:
         return "O‘qituvchi tekshiruvi tugamaguncha sertifikat yuklab olinmaydi.",409
@@ -809,9 +809,22 @@ def certificate_image(cert_id):
     # Emblem
     d.ellipse((710,82,890,262),outline=gold,width=5,fill="#fffefa")
     d.ellipse((722,94,878,250),outline=gold_light,width=2)
-    center(145,"N",76,blue,True,130)
-    center(218,"TA'LIM",19,gold,True,150)
-    center(300,"MIRZAYEV GROUP",28,blue,True)
+    logo_data=r["certificate_logo"]
+    if logo_data:
+        import base64
+        try:
+            logo=Image.open(io.BytesIO(base64.b64decode(logo_data))).convert("RGB")
+            logo.thumbnail((148,148))
+            mask=Image.new("L",logo.size,0)
+            ImageDraw.Draw(mask).ellipse((0,0,logo.width-1,logo.height-1),fill=255)
+            im.paste(logo,(800-logo.width//2,172-logo.height//2),mask)
+        except Exception:
+            center(145,"N",76,blue,True,130)
+    else:
+        center(145,"N",76,blue,True,130)
+        center(218,"NEURON",16,gold,True,150)
+    org_name=(r["certificate_org_name"] or r["teacher_full_name"] or "NEURON TEST BOT").strip()
+    center(300,org_name,28,blue,True,1320)
     center(345,"BILIM VA MALAKALARNI BAHOLASH TIZIMI",19,muted,True)
     line(382)
     center(445,"UMUMTA'LIM FANINI BILISH DARAJASI",43,ink,True)
