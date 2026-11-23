@@ -391,43 +391,65 @@ def certificate_pdf(cert_id):
     with db() as c:
         r=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id WHERE cert_id=?",(cert_id,)).fetchone()
     if not r: abort(404)
-    if r["review_status"]=="pending" or int(r["focus_warning"] or 0)>=2: return "O‘qituvchi tekshiruvi tugamaguncha sertifikat yuklab olinmaydi.",409
+    if r["review_status"]=="pending" or int(r["focus_warning"] or 0)>=2:
+        return "O‘qituvchi tekshiruvi tugamaguncha sertifikat yuklab olinmaydi.",409
+
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.enums import TA_CENTER
     from reportlab.lib.units import mm
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
     from xml.sax.saxutils import escape
+
     buff=io.BytesIO()
-    page_w=297*mm; page_h=167*mm
-    doc=SimpleDocTemplate(buff,pagesize=(page_w,page_h),rightMargin=8*mm,leftMargin=8*mm,topMargin=8*mm,bottomMargin=8*mm)
+    page_w,page_h=landscape(A4)
+    margin=17*mm
+
+    def draw_certificate(canvas, document):
+        canvas.saveState()
+        canvas.setStrokeColor(colors.HexColor("#315efb"))
+        canvas.setLineWidth(2.2)
+        canvas.roundRect(margin/2, margin/2, page_w-margin, page_h-margin, 9*mm, stroke=1, fill=0)
+        canvas.setStrokeColor(colors.HexColor("#c7d5ff"))
+        canvas.setLineWidth(0.9)
+        canvas.roundRect(margin, margin, page_w-2*margin, page_h-2*margin, 6*mm, stroke=1, fill=0)
+        canvas.restoreState()
+
+    doc=SimpleDocTemplate(
+        buff,pagesize=(page_w,page_h),
+        rightMargin=margin+8*mm,leftMargin=margin+8*mm,
+        topMargin=margin+7*mm,bottomMargin=margin+7*mm
+    )
     styles=getSampleStyleSheet()
     def style(name,size,color,leading=None):
-        return ParagraphStyle(name,parent=styles["Normal"],fontName="Helvetica",fontSize=size,leading=leading or size*1.35,textColor=colors.HexColor(color),alignment=TA_CENTER)
+        return ParagraphStyle(
+            name,parent=styles["Normal"],fontName="Helvetica",
+            fontSize=size,leading=leading or size*1.3,
+            textColor=colors.HexColor(color),alignment=TA_CENTER,
+            spaceAfter=0,spaceBefore=0
+        )
+
     story=[
         Spacer(1,5*mm),
-        Paragraph("NEURON",style("NeuronTitle",29,"#18336b",34)),
+        Paragraph("NEURON",style("NeuronTitle",27,"#18336b",33)),
         Spacer(1,2*mm),
-        Paragraph("SERTIFIKAT",style("NeuronSubtitle",21,"#315efb",26)),
+        Paragraph("SERTIFIKAT",style("NeuronSubtitle",20,"#315efb",25)),
         Spacer(1,5*mm),
         Paragraph("Ushbu sertifikat taqdim etiladi",style("AwardText",11,"#52617a",15)),
-        Spacer(1,4*mm),
-        Paragraph(escape(str(r["full_name"])),style("StudentName",25,"#172b55",31)),
-        Spacer(1,4*mm),
-        Paragraph("“"+escape(str(r["title"]))+"” test sinovi natijasi",style("TestTitle",11,"#52617a",15)),
-        Spacer(1,8*mm),
-        Paragraph(f'{float(r["score"]):.1f} / {r["total"]} &nbsp;&nbsp; | &nbsp;&nbsp; {r["percent"]}%',style("ScoreLine",21,"#18336b",27)),
+        Spacer(1,3*mm),
+        Paragraph(escape(str(r["full_name"])),style("StudentName",24,"#172b55",30)),
+        Spacer(1,3*mm),
+        Paragraph("“"+escape(str(r["title"]))+"” test sinovi natijasi",style("TestTitle",10,"#52617a",14)),
         Spacer(1,7*mm),
-        Paragraph("Sertifikat ID: "+escape(str(r["cert_id"])),style("CertId",9,"#52617a",12)),
+        Paragraph(f'{float(r["score"]):.1f} / {r["total"]} &nbsp;&nbsp; | &nbsp;&nbsp; {r["percent"]}%',style("ScoreLine",20,"#18336b",26)),
+        Spacer(1,6*mm),
+        Paragraph("Sertifikat ID: "+escape(str(r["cert_id"])),style("CertId",8,"#52617a",11)),
         Spacer(1,2*mm),
-        Paragraph("Sana: "+escape(str(r["created_at"])[:10]),style("CertDate",9,"#52617a",12))
+        Paragraph("Sana: "+escape(str(r["created_at"])[:10]),style("CertDate",8,"#52617a",11))
     ]
-    inner=Table([[story]],colWidths=[page_w-34*mm],rowHeights=[page_h-34*mm])
-    inner.setStyle(TableStyle([("BOX",(0,0),(-1,-1),1.1,colors.HexColor("#c7d5ff")),("VALIGN",(0,0),(-1,-1),"MIDDLE"),("LEFTPADDING",(0,0),(-1,-1),8),("RIGHTPADDING",(0,0),(-1,-1),8),("TOPPADDING",(0,0),(-1,-1),5),("BOTTOMPADDING",(0,0),(-1,-1),5)]))
-    outer=Table([[inner]],colWidths=[page_w-16*mm],rowHeights=[page_h-16*mm])
-    outer.setStyle(TableStyle([("BOX",(0,0),(-1,-1),2.2,colors.HexColor("#315efb")),("VALIGN",(0,0),(-1,-1),"MIDDLE"),("LEFTPADDING",(0,0),(-1,-1),7),("RIGHTPADDING",(0,0),(-1,-1),7),("TOPPADDING",(0,0),(-1,-1),7),("BOTTOMPADDING",(0,0),(-1,-1),7)]))
-    doc.build([outer]); buff.seek(0)
+    doc.build(story,onFirstPage=draw_certificate,onLaterPages=draw_certificate)
+    buff.seek(0)
     return send_file(buff,mimetype="application/pdf",as_attachment=True,download_name=f"NEURON_{r['cert_id']}.pdf")
 
 @app.route("/admin", methods=["GET","POST"])
