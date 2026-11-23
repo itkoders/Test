@@ -399,65 +399,17 @@ def certificate_pdf(cert_id):
     if not r: abort(404)
     if r["review_status"]=="pending" or int(r["focus_warning"] or 0)>=2:
         return "O‘qituvchi tekshiruvi tugamaguncha sertifikat yuklab olinmaydi.",409
-
-    from reportlab.lib import colors
+    pic=certificate_image(cert_id)
+    if not pic: abort(404)
+    from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import A4, landscape
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.enums import TA_CENTER
-    from reportlab.lib.units import mm
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-    from xml.sax.saxutils import escape
-
+    from reportlab.lib.utils import ImageReader
     buff=io.BytesIO()
     page_w,page_h=landscape(A4)
-    margin=17*mm
-
-    def draw_certificate(canvas, document):
-        canvas.saveState()
-        canvas.setStrokeColor(colors.HexColor("#315efb"))
-        canvas.setLineWidth(2.2)
-        canvas.roundRect(margin/2, margin/2, page_w-margin, page_h-margin, 9*mm, stroke=1, fill=0)
-        canvas.setStrokeColor(colors.HexColor("#c7d5ff"))
-        canvas.setLineWidth(0.9)
-        canvas.roundRect(margin, margin, page_w-2*margin, page_h-2*margin, 6*mm, stroke=1, fill=0)
-        canvas.restoreState()
-
-    doc=SimpleDocTemplate(
-        buff,pagesize=(page_w,page_h),
-        rightMargin=margin+8*mm,leftMargin=margin+8*mm,
-        topMargin=margin+7*mm,bottomMargin=margin+7*mm
-    )
-    styles=getSampleStyleSheet()
-    def style(name,size,color,leading=None):
-        return ParagraphStyle(
-            name,parent=styles["Normal"],fontName="Helvetica",
-            fontSize=size,leading=leading or size*1.3,
-            textColor=colors.HexColor(color),alignment=TA_CENTER,
-            spaceAfter=0,spaceBefore=0
-        )
-
-    story=[
-        Spacer(1,5*mm),
-        Paragraph("NEURON",style("NeuronTitle",27,"#18336b",33)),
-        Spacer(1,2*mm),
-        Paragraph("SERTIFIKAT",style("NeuronSubtitle",20,"#315efb",25)),
-        Spacer(1,5*mm),
-        Paragraph("Ushbu sertifikat taqdim etiladi",style("AwardText",11,"#52617a",15)),
-        Spacer(1,3*mm),
-        Paragraph(escape(str(r["full_name"])),style("StudentName",24,"#172b55",30)),
-        Spacer(1,3*mm),
-        Paragraph("“"+escape(str(r["title"]))+"” test sinovi natijasi",style("TestTitle",10,"#52617a",14)),
-        Spacer(1,7*mm),
-        Paragraph(f'{float(r["score"]):.1f} / {r["total"]} &nbsp;&nbsp; | &nbsp;&nbsp; {r["percent"]}%',style("ScoreLine",20,"#18336b",26)),
-        Spacer(1,6*mm),
-        Paragraph("Sertifikat ID: "+escape(str(r["cert_id"])),style("CertId",8,"#52617a",11)),
-        Spacer(1,2*mm),
-        Paragraph("Sana: "+escape(str(r["created_at"])[:10]),style("CertDate",8,"#52617a",11))
-    ]
-    doc.build(story,onFirstPage=draw_certificate,onLaterPages=draw_certificate)
-    buff.seek(0)
+    pdf=canvas.Canvas(buff,pagesize=(page_w,page_h),pageCompression=1)
+    pdf.drawImage(ImageReader(pic),0,0,width=page_w,height=page_h,preserveAspectRatio=False,mask="auto")
+    pdf.showPage(); pdf.save(); buff.seek(0)
     return send_file(buff,mimetype="application/pdf",as_attachment=True,download_name=f"NEURON_{r['cert_id']}.pdf")
-
 @app.route("/admin", methods=["GET","POST"])
 def admin_login():
     if session.get("admin"): return redirect(url_for("dashboard"))
@@ -740,34 +692,99 @@ def notify_teacher(message):
 
 def certificate_image(cert_id):
     from PIL import Image, ImageDraw, ImageFont
+    import qrcode
+    from urllib.parse import quote
     with db() as c:
         r=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id WHERE cert_id=?",(cert_id,)).fetchone()
     if not r or r["review_status"]=="pending" or int(r["focus_warning"] or 0)>=2: return None
-    im=Image.new("RGB",(1600,900),"#f3f6fc"); d=ImageDraw.Draw(im)
-    d.rounded_rectangle((35,35,1565,865),radius=34,outline="#315efb",width=8,fill="#ffffff")
-    d.rounded_rectangle((68,68,1532,832),radius=24,outline="#c7d5ff",width=3)
-    font_path="/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    def font(size):
-        try: return ImageFont.truetype(font_path,size)
-        except Exception: return ImageFont.load_default()
-    def centered(y,text,size,color,max_width=1380):
-        size=int(size)
-        while size>16:
-            f=font(size)
-            box=d.textbbox((0,0),str(text),font=f)
-            if box[2]-box[0]<=max_width: break
-            size-=2
-        d.text((800,y),str(text),font=f,fill=color,anchor="mm")
-    centered(155,"NEURON",62,"#18336b")
-    centered(255,"SERTIFIKAT",43,"#315efb")
-    centered(340,"Ushbu sertifikat taqdim etiladi",25,"#52617a")
-    centered(445,r["full_name"],47,"#172b55")
-    centered(535,"“"+str(r["title"])+"” test sinovi natijasi",24,"#52617a")
-    centered(665,f'{float(r["score"]):.1f} / {r["total"]}     |     {r["percent"]}%',39,"#18336b")
-    centered(755,"Sertifikat ID: "+str(r["cert_id"]),20,"#52617a")
-    centered(800,"Sana: "+str(r["created_at"])[:10],18,"#52617a")
-    out=io.BytesIO(); im.save(out,format="PNG"); out.seek(0); return out
 
+    W,H=1600,1131
+    paper="#fffdf5"; gold="#bd8b22"; gold_light="#e5c879"; blue="#183d63"; ink="#182536"; muted="#586779"
+    im=Image.new("RGB",(W,H),paper); d=ImageDraw.Draw(im)
+    # Double gold frame
+    d.rectangle((28,28,W-28,H-28),outline=gold,width=8)
+    d.rectangle((45,45,W-45,H-45),outline=gold_light,width=3)
+    d.rectangle((66,66,W-66,H-66),outline="#ead9a8",width=2)
+
+    font_candidates=[
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    ]
+    bold_candidates=[
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    ]
+    def font(size,bold=False):
+        for path in (bold_candidates if bold else font_candidates):
+            try: return ImageFont.truetype(path,size)
+            except Exception: pass
+        return ImageFont.load_default()
+    def center(y,text,size,color=ink,bold=False,max_width=1360):
+        text=str(text)
+        fs=size
+        while fs>14:
+            ft=font(fs,bold)
+            box=d.textbbox((0,0),text,font=ft)
+            if box[2]-box[0] <= max_width: break
+            fs-=2
+        d.text((W//2,y),text,font=font(fs,bold),fill=color,anchor="mm")
+    def line(y,x1=90,x2=1510,width=4):
+        d.line((x1,y,x2,y),fill=gold,width=width)
+    def ornament(cx,cy,scale=1):
+        pts=[(cx,cy-22*scale),(cx+22*scale,cy),(cx,cy+22*scale),(cx-22*scale,cy)]
+        d.polygon(pts,outline=gold,width=3)
+    # Corner geometric ornaments
+    for base_x,base_y,sx,sy in [(68,68,1,1),(1532,68,-1,1),(68,1063,1,-1),(1532,1063,-1,-1)]:
+        for n in range(3):
+            x=base_x+sx*n*24; y=base_y+sy*n*24
+            d.line((x,y,x+sx*78,y+sy*78),fill=gold_light,width=5)
+            d.line((x+sx*78,y+sy*78,x+sx*156,y),fill=gold_light,width=5)
+    # Emblem
+    d.ellipse((710,82,890,262),outline=gold,width=5,fill="#fffefa")
+    d.ellipse((722,94,878,250),outline=gold_light,width=2)
+    center(145,"N",76,blue,True,130)
+    center(218,"TA'LIM",19,gold,True,150)
+    center(300,"MIRZAYEV GROUP",28,blue,True)
+    center(345,"BILIM VA MALAKALARNI BAHOLASH TIZIMI",19,muted,True)
+    line(382)
+    center(445,"UMUMTA'LIM FANINI BILISH DARAJASI",43,ink,True)
+    center(500,"TO'G'RISIDA SERTIFIKAT",43,ink,True)
+    line(548)
+
+    # Student and assessment information
+    d.text((125,600),"SERTIFIKAT TAQDIM ETILADI",font=font(22,True),fill=blue)
+    center(665,r["full_name"],43,ink,True,1250)
+    center(718,'“'+str(r["title"])+'” fanidan test sinovi natijasi',22,muted,False,1300)
+    line(760,125,1475,3)
+
+    left_x=145; value_x=610
+    labels=[
+        ("Umumiy to'plagan ball:",f'{float(r["score"]):.1f} / {r["total"]}'),
+        ("Foiz ko'rsatkichi:",f'{float(r["percent"]):.1f}%'),
+        ("Sertifikat darajasi:", "A" if float(r["percent"])>=90 else "B" if float(r["percent"])>=75 else "C" if float(r["percent"])>=60 else "Ishtirok"),
+    ]
+    for i,(label,value) in enumerate(labels):
+        y=805+i*48
+        d.text((left_x,y),label,font=font(24),fill=blue)
+        d.text((value_x,y),value,font=font(25,True),fill=ink)
+
+    # QR verification code
+    verify_url=request.host_url.rstrip("/")+"/certificate/"+quote(str(r["cert_id"]))
+    qr=qrcode.QRCode(version=None,error_correction=qrcode.constants.ERROR_CORRECT_M,box_size=5,border=2)
+    qr.add_data(verify_url); qr.make(fit=True)
+    qr_img=qr.make_image(fill_color="#172536",back_color="#ffffff").convert("RGB").resize((176,176))
+    im.paste(qr_img,(1280,820))
+    d.text((1368,1010),"QR: tekshirish",font=font(16,True),fill=blue,anchor="mm")
+
+    line(1015,125,1475,3)
+    d.text((145,1044),"Sertifikat ID:",font=font(18),fill=blue)
+    d.text((300,1044),str(r["cert_id"]),font=font(19,True),fill=ink)
+    d.text((790,1044),"Berilgan sana:",font=font(18),fill=blue)
+    d.text((965,1044),str(r["created_at"])[:10],font=font(19,True),fill=ink)
+    d.line((1120,1080,1460,1080),fill=gold,width=2)
+    d.text((1290,1098),"Mas'ul rahbar",font=font(15),fill=muted,anchor="mm")
+
+    out=io.BytesIO(); im.save(out,format="PNG",dpi=(180,180)); out.seek(0); return out
 def deliver_certificate(cert_id):
     with db() as c: approved=c.execute("SELECT certificate_approved FROM results WHERE cert_id=?",(cert_id,)).fetchone()
     if not approved or not approved["certificate_approved"]: return False
