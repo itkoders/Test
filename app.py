@@ -366,8 +366,8 @@ def submit_test(test_id):
     percent=round(score*100/total) if total else 0
     cert="NR-"+secrets.token_hex(4).upper()
     with db() as c:
-        cur=c.execute("INSERT INTO results(test_id,full_name,student_id,score,total,percent,cert_id,created_at,manual_answers,review_status,focus_warning) VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
-        (test_id,candidate["name"],"",score,total,percent,cert,datetime.utcnow().isoformat(),json.dumps(manual,ensure_ascii=False),"pending" if manual else "checked",warnings))
+        cur=c.execute("INSERT INTO results(test_id,full_name,student_id,score,total,percent,cert_id,created_at,manual_answers,review_status,focus_warning,certificate_approved) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+        (test_id,candidate["name"],"",score,total,percent,cert,datetime.utcnow().isoformat(),json.dumps(manual,ensure_ascii=False),"pending" if manual else "checked",warnings,bool(test["certificate_mode"]=="threshold" and not manual and warnings<2 and score>=float(test["certificate_min_score"] or 0))))
         result_id=cur.fetchone()["id"]
     try:
         review_line="✍️ Yopiq savollar: "+str(len(manual))+" ta" if manual else "✍️ Yopiq savollar: yo‘q"
@@ -611,12 +611,13 @@ def teacher_register_page():
 def teacher_cabinet():
     with db() as c:
         t=c.execute("SELECT * FROM teacher_accounts WHERE telegram_id=?",(session["teacher_id"],)).fetchone()
-        rows=c.execute("SELECT results.*,tests.title,tests.code,tests.subject,tests.grade,EXISTS(SELECT 1 FROM blocked_students b WHERE b.test_id=results.test_id AND b.full_name_key=lower(trim(results.full_name))) AS is_blocked FROM results JOIN tests ON tests.id=results.test_id WHERE tests.teacher_id=? ORDER BY results.id DESC LIMIT 100", (session["teacher_id"],)).fetchall()
+        rows=c.execute("SELECT results.*,tests.title,tests.code,tests.subject,tests.grade,tests.certificate_mode,tests.certificate_min_score,EXISTS(SELECT 1 FROM blocked_students b WHERE b.test_id=results.test_id AND b.full_name_key=lower(trim(results.full_name))) AS is_blocked FROM results JOIN tests ON tests.id=results.test_id WHERE tests.teacher_id=? ORDER BY results.id DESC LIMIT 100", (session["teacher_id"],)).fetchall()
         tests=c.execute("SELECT * FROM tests WHERE teacher_id=? ORDER BY id DESC LIMIT 100",(session["teacher_id"],)).fetchall()
     return page("O‘qituvchi kabineti", """<section class="panel-hero"><p class="eyebrow" style="color:#c7d7ff">NEURON V2 · TEACHER</p><h1>Assalomu alaykum, {{t['full_name']}}</h1><p class="muted">{{t['subject']}} · {{t['phone']}}</p><p class="muted">Kabinet bo‘limlarini pastdagi ilova menyusidan oching.</p></section>
 <div class="grid"><div class="stat"><b>{{tests|length}}</b>Yaratilgan testlar</div><div class="stat"><b>{{rows|length}}</b>O‘quvchilar</div><div class="stat"><b>{{rows|selectattr('review_status','equalto','pending')|list|length}}</b>Tekshiruv kutilmoqda</div></div>
 <section class="card teacher-screen active" id="create"><p class="eyebrow">TEST KONSTRUKTORI</p><h2>＋ Yangi test yaratish</h2><p class="muted">Fan va sinfni tanlang. Javoblar kalitini savol turi bo‘yicha belgilang — yopiq savollarni keyin o‘zingiz baholaysiz.</p>
 <form method="post" action="/teacher/create" enctype="multipart/form-data"><div class="grid"><div><label>Fan nomi</label><input name="subject" value="{{t['subject']}}" required placeholder="Masalan: Tarix"></div><div><label>Sinf / kurs</label><input name="grade" required placeholder="Masalan: 8-sinf"></div></div><label>Test nomi</label><input name="title" required placeholder="Masalan: 1-mavzu nazorati"><div class="grid"><div><label>Davomiyligi (daqiqada)</label><input name="duration" type="number" min="1" max="240" value="30" required></div><div><label>Savollar soni</label><input name="question_count" type="number" min="1" max="100" value="10" required></div></div>
+<div class="question"><h3>🏅 Sertifikat berish tartibi</h3><label>Berish usuli</label><select name="certificate_mode"><option value="manual">Qo‘lda — o‘qituvchi tanlaydi</option><option value="threshold">Avtomatik — minimal ball bo‘yicha</option></select><label>Minimal ball</label><input name="certificate_min_score" type="number" min="0" step="0.5" value="7"><p class="muted">Avtomatik rejimda shu balldan kam bo‘lmagan natija olgan o‘quvchiga, tekshiruv tugagach, sertifikat yuboriladi.</p></div>
 <label>Savollar fayli (PDF yoki DOCX, 15 MB gacha)</label><div class="filebox">📎 <b>Test hujjatini tanlang</b><input type="file" name="test_file" accept=".pdf,.docx" required></div>
 <h3>EvalBee uslubidagi javoblar kaliti</h3><div class="key-help muted">🔵 Variantli · 🟢 To‘g‘ri/Noto‘g‘ri · ✍️ Qisqa javob · 📝 Yopiq savol — o‘qituvchi tekshiradi.</div><div id="teacherKeyRows"></div><input type="hidden" name="answer_key" id="teacherAnswerKey" required><p id="teacherKeyProgress" class="muted">0 ta javob belgilandi</p><button class="full">🚀 Testni yaratish</button></form></section>
 <section class="card teacher-screen" id="tests"><h2>📚 Mening testlarim</h2>{% for x in tests %}<div class="question"><b>{{x['title']}}</b><p class="muted">{{x['subject']}} · {{x['grade']}} · {{x['question_count']}} savol · {{x['duration']}} daqiqa</p><p class="eyebrow">TEST KODI</p><div class="stat"><b style="font-size:20px">{{x['code']}}</b></div><button type="button" class="secondary full" onclick="copyText(this,'{{x['code']}}')">📋 Kodni nusxalash</button></div>{% else %}<p class="muted">Hali test yaratmagansiz.</p>{% endfor %}</section>
@@ -651,7 +652,11 @@ def teacher_create_test():
     initials="".join(x[0] for x in tname.split()[:2]).upper() if (tname:=get_teacher_name(session["teacher_id"])) else "UST"
     code=prefix+"-"+gradecode+"-"+initials+"-"+secrets.token_hex(2).upper()
     with db() as c:
-        c.execute("INSERT INTO tests(title,code,duration,questions,created_at,file_name,file_data,answer_key,question_count,teacher_id,subject,grade) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(title,code,duration,"",datetime.utcnow().isoformat(),filename,data,json.dumps(answers,ensure_ascii=False),count,session["teacher_id"],subject,grade))
+        cert_mode=request.form.get("certificate_mode","manual")
+    if cert_mode not in ("manual","threshold"): cert_mode="manual"
+    try: cert_min=max(0.0,min(float(count),float(request.form.get("certificate_min_score","0"))))
+    except Exception: cert_min=0.0
+    c.execute("INSERT INTO tests(title,code,duration,questions,created_at,file_name,file_data,answer_key,question_count,teacher_id,subject,grade,certificate_mode,certificate_min_score) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(title,code,duration,"",datetime.utcnow().isoformat(),filename,data,json.dumps(answers,ensure_ascii=False),count,session["teacher_id"],subject,grade,cert_mode,cert_min))
     flash("Test yaratildi! O‘quvchilarga fan va sinfga mos kodni bering: "+code)
     return redirect(url_for("teacher_cabinet"))
 
@@ -672,7 +677,7 @@ def teacher_review(result_id):
             except Exception: got=-1
             if got<0 or got>len(items): flash("Baholar noto‘g‘ri."); return redirect(url_for("teacher_review",result_id=result_id))
             final=float(r["score"])+got; percent=round(final*100/float(r["total"])) if r["total"] else 0
-            c.execute("UPDATE results SET score=?,percent=?,manual_score=?,review_status='checked' WHERE id=?",(final,percent,got,result_id))
+            c.execute("UPDATE results SET score=?,percent=?,manual_score=?,review_status='checked',certificate_approved=CASE WHEN (SELECT certificate_mode FROM tests WHERE tests.id=results.test_id)='threshold' AND ? >= (SELECT certificate_min_score FROM tests WHERE tests.id=results.test_id) AND COALESCE(focus_warning,0)<2 THEN TRUE ELSE FALSE END WHERE id=?",(final,percent,got,final,result_id))
             cert=r["cert_id"]
         else: cert=""
     if request.method=="POST":
@@ -746,6 +751,8 @@ def certificate_image(cert_id):
     out=io.BytesIO(); im.save(out,format="PNG"); out.seek(0); return out
 
 def deliver_certificate(cert_id):
+    with db() as c: approved=c.execute("SELECT certificate_approved FROM results WHERE cert_id=?",(cert_id,)).fetchone()
+    if not approved or not approved["certificate_approved"]: return False
     pic=certificate_image(cert_id)
     if not pic or not BOT_TOKEN: return False
     with db() as c: chats=[r["chat_id"] for r in c.execute("SELECT chat_id FROM teacher_accounts WHERE status='approved'").fetchall()]
@@ -791,7 +798,10 @@ def telegram_webhook():
         with db() as c: c.execute("UPDATE teacher_accounts SET subject=?,status='pending',stage='',created_at=? WHERE telegram_id=?",(msg[:100],datetime.utcnow().isoformat(),uid))
         telegram_api("sendMessage",{"chat_id":chat_id,"text":"Arizangiz yuborildi. Admin tasdiqlashini kuting."})
     elif msg.startswith("/start"):
-        telegram_api("sendMessage",{"chat_id":chat_id,"text":"Assalomu alaykum! NEURON botiga xush kelibsiz. O‘qituvchi bo‘lish uchun /teacher buyrug‘ini yuboring.","reply_markup":{"inline_keyboard":[[{"text":"🚀 Testni boshlash","web_app":{"url":MINI_APP_URL}}],[{"text":"👩‍🏫 O‘qituvchi sifatida ro‘yxatdan o‘tish","callback_data":"teacher_register"}]]}})
+        welcome=("🧠 NEURON TEST — Bilimni sinash platformasi\n\nAssalomu alaykum! NEURON’ga xush kelibsiz.\n\n🎓 O‘quvchilar: test kodini kiriting, belgilangan vaqt ichida savollarga javob bering va natijangizni ko‘ring.\n\n👩‍🏫 O‘qituvchilar: testlarni boshqaring, javoblarni tekshiring, natijalarni kuzating va sertifikatlarni belgilang.\n\n👇 Kerakli bo‘limni tanlang.")
+        telegram_api("sendMessage",{"chat_id":chat_id,"text":welcome,"reply_markup":{"inline_keyboard":[[{"text":"🚀 Testni boshlash","web_app":{"url":MINI_APP_URL}}],[{"text":"👩‍🏫 O‘qituvchi kabinetiga kirish","url":MINI_APP_URL+"/teacher/login"}],[{"text":"📝 O‘qituvchi sifatida ro‘yxatdan o‘tish","callback_data":"teacher_register"}]]}})
+    elif msg.startswith("/start"):
+        telegram_api("sendMessage",{"chat_id":chat_id,"text":"NEURON",""reply_markup":{"inline_keyboard":[[{"text":"🚀 Testni boshlash","web_app":{"url":MINI_APP_URL}}],[{"text":"👩‍🏫 O‘qituvchi sifatida ro‘yxatdan o‘tish","callback_data":"teacher_register"}]]}})
     elif msg=="/myid": telegram_api("sendMessage",{"chat_id":chat_id,"text":"Telegram ID: "+str(chat_id)})
     elif msg=="/help": telegram_api("sendMessage",{"chat_id":chat_id,"text":"/start — testni ochish\n/teacher — o‘qituvchi ro‘yxati"})
     return {"ok":True}
