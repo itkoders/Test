@@ -28,7 +28,7 @@ def init_db():
             score INTEGER NOT NULL, total INTEGER NOT NULL, percent INTEGER NOT NULL,
             cert_id TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL)""")
         cols = {r["name"] for r in c.execute("PRAGMA table_info(tests)").fetchall()}
-        for name, typ in [("file_name","TEXT"),("file_data","BLOB"),("answer_key","TEXT"),("question_count","INTEGER NOT NULL DEFAULT 0"),("manual_answers","TEXT"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0")]:
+        for name, typ in [("file_name","TEXT"),("file_data","BLOB"),("answer_key","TEXT"),("question_count","INTEGER NOT NULL DEFAULT 0"),("manual_answers","TEXT"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0")]:
             if name not in cols:
                 c.execute(f"ALTER TABLE tests ADD COLUMN {name} {typ}")
 
@@ -238,7 +238,8 @@ def dashboard():
     countInput.addEventListener('input',drawKeys);drawKeys();
     </script>
     <section class="card"><h2>Mavjud testlar</h2>{% for t in tests %}<div class="question"><b>{{t['title']}}</b><p class="muted">Kod: {{t['code']}} · {{t['question_count']}} savol · {{t['duration']}} daqiqa · {{t['file_name'] or 'Eski test'}}</p></div>{% else %}<p class="muted">Hozircha test yo‘q.</p>{% endfor %}</section>
-    <section class="card"><h2>Oxirgi natijalar</h2>{% for r in results %}<p>{{r['full_name']}} — {{r['title']}} — <b>{{r['percent']}}%</b> · {{'O‘qituvchi tekshiruvi kutilmoqda' if r['review_status']=='pending' else r['cert_id']}}{% if r['focus_warning'] %} · <b>Oyna almashgan</b>{% endif %}</p>{% else %}<p class="muted">Natijalar hali yo‘q.</p>{% endfor %}<a class="btn dark" href="/admin/logout">Chiqish</a></section>
+    <section class="card"><h2>Oxirgi natijalar</h2>{% for r in results %}<div class="question"><p>{{r['full_name']}} — {{r['title']}} — <b>{{r['percent']}}%</b> · {{'O‘qituvchi tekshiruvi kutilmoqda' if r['review_status']=='pending' else r['cert_id']}}{% if r['focus_warning'] %} · <b>Oyna almashgan (tekshiring)</b>{% endif %}</p>
+    {% if r['review_status']=='pending' %}<p class="muted">Yopiq javoblar: {{r['manual_answers']}}</p><form method="post" action="/admin/review/{{r['id']}}"><label>Yopiq savollardan nechta to‘g‘ri? (0 dan {{r['manual_answers']|length}} gacha)</label><input name="manual_score" type="number" min="0" max="200" value="0" required><button>Tekshiruvni yakunlash</button></form>{% endif %}</div>{% else %}<p class="muted">Natijalar hali yo‘q.</p>{% endfor %}<a class="btn dark" href="/admin/logout">Chiqish</a></section>
     """,tests=tests,results=results)
 
 @app.post("/admin/create")
@@ -271,6 +272,25 @@ def create_test():
             (title,code,duration,"",datetime.utcnow().isoformat(),filename,data,json.dumps(answers,ensure_ascii=False),count))
         flash("Test muvaffaqiyatli yaratildi. Test kodi: "+code)
     except sqlite3.IntegrityError: flash("Bu test kodi band. Boshqa kod kiriting.")
+    return redirect(url_for("dashboard"))
+
+@app.post("/admin/review/<int:result_id>")
+@admin_required
+def review_result(result_id):
+    with db() as c:
+        r=c.execute("SELECT * FROM results WHERE id=?",(result_id,)).fetchone()
+        if not r or r["review_status"]!="pending": abort(404)
+        try: manual=json.loads(r["manual_answers"] or "[]")
+        except Exception: manual=[]
+        n=len(manual)
+        try: got=int(request.form.get("manual_score","0"))
+        except Exception: got=-1
+        if got<0 or got>n:
+            flash("Yopiq savollar uchun kiritilgan ball noto‘g‘ri."); return redirect(url_for("dashboard"))
+        final_score=int(r["score"])+got
+        percent=round(final_score*100/int(r["total"])) if r["total"] else 0
+        c.execute("UPDATE results SET score=?,percent=?,manual_score=?,review_status='checked' WHERE id=?",(final_score,percent,got,result_id))
+    flash("Yopiq savollar tekshirildi. Yakuniy natija va sertifikat tayyor.")
     return redirect(url_for("dashboard"))
 
 @app.get("/admin/logout")
