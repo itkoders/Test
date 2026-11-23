@@ -107,12 +107,12 @@ def take_test(test_id):
     {% if test['file_name'] %}<a class="btn secondary full" href="/testfile/{{test['id']}}" target="_blank">📄 Faylni alohida oynada ochish</a>{% endif %}
     </section><section class="card"><h2>Javoblar varaqasi</h2><form id="answerForm" method="post" action="/submit/{{test['id']}}">
     {% for i in range(1,count+1) %}<div class="answer-row"><div class="qnum">{{i}}</div><div>
-    <select name="q{{i}}" aria-label="{{i}}-savol javobi" required><option value="">Javobni tanlang</option>
+    <select name="q{{i}}" aria-label="{{i}}-savol javobi"><option value="">Javobni tanlang</option>
     <option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option>
     <option value="TRUE">To‘g‘ri</option><option value="FALSE">Noto‘g‘ri</option>
-    </select></div></div>{% endfor %}
+    </select><input name="q{{i}}_text" placeholder="Yoki qisqa javobni yozing" aria-label="{{i}}-savol qisqa javobi" style="margin-top:6px"></div></div>{% endfor %}
     <button class="full" type="submit">Testni yakunlash ✓</button></form></section></div>
-    <script>let left={{test['duration']}}*60;const el=document.getElementById('clock');const form=document.getElementById('answerForm');function tick(){let m=Math.floor(left/60),s=left%60;el.textContent=m+':'+String(s).padStart(2,'0');if(left<=0){form.submit();return;}left--;}tick();setInterval(tick,1000);</script>
+    <script>let left={{test['duration']}}*60;const el=document.getElementById('clock');const form=document.getElementById('answerForm');function tick(){let m=Math.floor(left/60),s=left%60;el.textContent=m+':'+String(s).padStart(2,'0');if(left<=0){form.submit();return;}left--;}form.addEventListener("submit",function(e){for(const row of form.querySelectorAll(".answer-row")){const sel=row.querySelector("select"),txt=row.querySelector("input");if(!sel.value&&!txt.value.trim()){e.preventDefault();alert("Barcha savollarga javob bering.");return;}}});tick();setInterval(tick,1000);</script>
     """,test=test,candidate=candidate,count=count)
 
 @app.get("/testfile/<int:test_id>")
@@ -145,7 +145,7 @@ def submit_test(test_id):
     try: key=json.loads(test["answer_key"] or "[]")
     except Exception: key=[]
     if not key: abort(400, "Javoblar kaliti mavjud emas.")
-    score=sum(1 for i,correct in enumerate(key,1) if request.form.get(f"q{i}","").strip().upper()==str(correct).strip().upper())
+    score=sum(1 for i,correct in enumerate(key,1) if (request.form.get(f"q{i}_text","").strip() or request.form.get(f"q{i}","").strip()).casefold()==str(correct).strip().casefold())
     total=len(key); percent=round(score*100/total) if total else 0
     cert="NR-"+secrets.token_hex(4).upper()
     with db() as c:
