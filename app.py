@@ -168,6 +168,7 @@ def start_test():
         return redirect(url_for("home"))
     session["candidate"]={"name":name,"test_id":test["id"]}
     session["started_at"]=datetime.utcnow().timestamp()
+    session["test_deadline"]=session["started_at"]+int(test["duration"] or 30)*60
     return redirect(url_for("take_test", test_id=test["id"]))
 
 @app.get("/test/<int:test_id>")
