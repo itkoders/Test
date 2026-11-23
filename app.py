@@ -346,7 +346,8 @@ def review_result(result_id):
         student=r["full_name"]; cert=r["cert_id"]
     try: notify_teacher("✅ NEURON — Rubrika saqlandi\\nO‘quvchi: "+student+"\\nYakuniy ball: "+str(final_score)+"/"+str(r["total"])+"\\nNatija: "+str(percent)+"%\\nSertifikat: "+cert)
     except Exception: app.logger.exception("Teacher review notification failed")
-    flash("Yopiq savollar baholandi. Agar test bloklangan bo‘lsa, blokni alohida bekor qiling.")
+    deliver_certificate(cert)
+    flash("Yopiq savollar baholandi. Sertifikat tayyor bo‘lsa rasm ko‘rinishida o‘qituvchi chatiga yuborildi.")
     return redirect(url_for("dashboard"))
 
 @app.post("/admin/clearflag/<int:result_id>")
@@ -356,7 +357,9 @@ def clear_test_flag(result_id):
         r=c.execute("SELECT id FROM results WHERE id=?",(result_id,)).fetchone()
         if not r: abort(404)
         c.execute("UPDATE results SET focus_warning=0 WHERE id=?",(result_id,))
-    flash("Test blokidan chiqarildi.")
+    with db() as c: r=c.execute("SELECT cert_id FROM results WHERE id=?",(result_id,)).fetchone()
+    if r: deliver_certificate(r["cert_id"])
+    flash("Test blokidan chiqarildi. Sertifikat tayyor bo‘lsa Telegramga yuborildi.")
     return redirect(url_for("dashboard"))
 
 @app.get("/admin/teachers")
@@ -472,7 +475,7 @@ def notify_teacher(message):
     sent=0
     for chat_id in chats:
         try:
-            result=telegram_api("sendMessage",{"chat_id":chat_id,"text":message,"reply_markup":{"inline_keyboard":[[{"text":"📋 O‘qituvchi paneli","url":"https://mirzayev-group.onrender.com/admin"}]]}})
+            result=telegram_api("sendMessage",{"chat_id":chat_id,"text":message,"reply_markup":{"inline_keyboard":[[{"text":"📋 O‘qituvchi paneli","url":"https://mirzayev-group.onrender.com/teacher/cabinet"}]]}})
             if result and result.get("ok"): sent+=1
         except Exception: app.logger.exception("Teacher Telegram notification failed")
     return sent>0
@@ -499,10 +502,6 @@ def deliver_certificate(cert_id):
     pic=certificate_image(cert_id)
     if not pic or not BOT_TOKEN: return False
     with db() as c: chats=[r["chat_id"] for r in c.execute("SELECT chat_id FROM teacher_accounts WHERE status='approved'").fetchall()]
-    for chat_id in chats:
-        try:
-            pic.seek(0); req=urllib.request.Request(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",data=__import__("urllib.parse").parse.urlencode({"chat_id":chat_id,"caption":"🏅 NEURON sertifikati · "+cert_id}).encode()+b"&photo="+b"",headers={"Content-Type":"application/x-www-form-urlencoded"})
-        except Exception: pass
     # Multipart upload for Telegram photo endpoint
     boundary="----Neuron"+secrets.token_hex(12); payload=pic.getvalue(); sent=False
     for chat_id in chats:
