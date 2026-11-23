@@ -14,6 +14,8 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-this-before-production")
+from datetime import timedelta
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=True, PERMANENT_SESSION_LIFETIME=timedelta(days=30))
 file_signer = URLSafeTimedSerializer(app.secret_key, salt="neuron-test-file-v1")
 app.config["MAX_CONTENT_LENGTH"] = 18 * 1024 * 1024
 DB = os.environ.get("DATABASE_PATH", "mirzayev_group.db")
@@ -227,7 +229,7 @@ footer{display:none}
 <main>{% with messages=get_flashed_messages() %}{% for m in messages %}<div class="notice">{{m}}</div>{% endfor %}{% endwith %}{{ content|safe }}</main>
 {% if session.get('teacher_id') %}<nav class="app-dock" aria-label="O‘qituvchi menyusi">
 {% if request.path=='/teacher/cabinet' %}<button data-panel-target="create"><span class="ico">＋</span>Yaratish</button><button data-panel-target="tests"><span class="ico">📚</span>Testlar</button><button data-panel-target="results"><span class="ico">📊</span>Natija</button><button data-panel-target="warnings"><span class="ico">⚠️</span>Ogohlantirish</button><button data-panel-target="certificates"><span class="ico">🏅</span>Sertifikat</button>
-{% else %}<a href="/teacher/cabinet"><span class="ico">⌂</span>Kabinet</a><a href="/teacher/logout"><span class="ico">↪</span>Chiqish</a>{% endif %}
+{% else %}<a href="/teacher/cabinet"><span class="ico">⌂</span>Kabinet</a><a href="/teacher/account"><span class="ico">⚙️</span>Sozlamalar</a><a href="/teacher/logout"><span class="ico">↪</span>Chiqish</a>{% endif %}
 </nav>{% elif session.get('admin') %}<nav class="app-dock" aria-label="Admin menyusi">
 {% if request.path=='/admin/dashboard' %}<button data-admin-target="overview"><span class="ico">⌂</span>Umumiy</button><button data-admin-target="adminTests"><span class="ico">📚</span>Testlar</button><button data-admin-target="adminResults"><span class="ico">📊</span>Natijalar</button><button data-admin-target="adminWarnings"><span class="ico">⚠️</span>Ogohlantirish</button><a href="/admin/teachers"><span class="ico">👩‍🏫</span>Ustozlar</a><a href="/admin/logout"><span class="ico">↪</span>Chiqish</a>
 {% else %}<a href="/admin/dashboard"><span class="ico">⌂</span>Boshqaruv</a><a href="/admin/logout"><span class="ico">↪</span>Chiqish</a>{% endif %}
@@ -547,15 +549,55 @@ def teacher_toggle_block(result_id):
 
 @app.route("/teacher/login",methods=["GET","POST"])
 def teacher_login():
+    if session.get("teacher_id"):
+        return redirect(url_for("teacher_cabinet"))
     if request.method=="POST":
         username=request.form.get("username","").strip()
         password=request.form.get("password","")
+        remember=request.form.get("remember")=="on"
         with db() as c: t=c.execute("SELECT * FROM teacher_accounts WHERE username=? AND status='approved'",(username,)).fetchone()
         check=hashlib.pbkdf2_hmac("sha256",password.encode(),b"neuron-teacher-v1",180000).hex()
         if t and t["password_hash"] and secrets.compare_digest(check,t["password_hash"]):
-            session["teacher_id"]=t["telegram_id"]; return redirect(url_for("teacher_cabinet"))
+            session.clear()
+            session["teacher_id"]=t["telegram_id"]
+            session.permanent=remember
+            return redirect(url_for("teacher_cabinet"))
         flash("Login yoki parol noto‘g‘ri.")
-    return page("O‘qituvchi kirish", """<section class="card"><p class="eyebrow">NEURON TEACHER</p><h1>O‘qituvchi kabinetiga kirish</h1><p class="muted">Admin tasdiqlagach, login va parol Telegram bot orqali yuboriladi. Hali ro‘yxatdan o‘tmagan bo‘lsangiz, avval ariza yuboring.</p><form method="post"><label>Login</label><input name="username" required autocomplete="username"><label>Parol</label><input name="password" type="password" required autocomplete="current-password"><button class="full">Kabinetga kirish</button></form><a class="btn secondary full" href="/teacher/register">📝 O‘qituvchi sifatida ro‘yxatdan o‘tish</a><p class="muted"><a href="/">Bosh sahifaga qaytish</a></p></section>""")
+    return page("O‘qituvchi kirish", """<section class="card"><p class="eyebrow">NEURON TEACHER</p><h1>O‘qituvchi kabinetiga kirish</h1><p class="muted">Admin tasdiqlagach, login va parol Telegram bot orqali yuboriladi. Hali ro‘yxatdan o‘tmagan bo‘lsangiz, avval ariza yuboring.</p><form method="post"><label>Login</label><input name="username" required autocomplete="username"><label>Parol</label><input name="password" type="password" required autocomplete="current-password"><label style="display:flex;align-items:center;gap:9px;margin:12px 0"><input type="checkbox" name="remember" checked style="width:auto"> Meni 30 kun eslab qol</label><button class="full">Kabinetga kirish</button></form><a class="btn secondary full" href="/teacher/register">📝 O‘qituvchi sifatida ro‘yxatdan o‘tish</a><p class="muted"><a href="/">Bosh sahifaga qaytish</a></p></section>""")
+
+
+@app.route("/teacher/account",methods=["GET","POST"])
+@teacher_required
+def teacher_account():
+    with db() as c:
+        t=c.execute("SELECT * FROM teacher_accounts WHERE telegram_id=?",(session["teacher_id"],)).fetchone()
+    if request.method=="POST":
+        current=request.form.get("current_password","")
+        new_username=request.form.get("username","").strip()
+        new_password=request.form.get("new_password","")
+        confirm=request.form.get("confirm_password","")
+        check=hashlib.pbkdf2_hmac("sha256",current.encode(),b"neuron-teacher-v1",180000).hex()
+        if not t or not t["password_hash"] or not secrets.compare_digest(check,t["password_hash"]):
+            flash("Amaldagi parol noto‘g‘ri.")
+        elif not re.fullmatch(r"[A-Za-z0-9_.-]{4,32}",new_username):
+            flash("Login 4–32 belgidan iborat bo‘lsin: lotin harflari, raqam, nuqta, _ yoki -.")
+        elif new_password and len(new_password)<8:
+            flash("Yangi parol kamida 8 belgidan iborat bo‘lishi kerak.")
+        elif new_password and new_password!=confirm:
+            flash("Yangi parollar bir-biriga mos kelmadi.")
+        else:
+            with db() as c:
+                duplicate=c.execute("SELECT telegram_id FROM teacher_accounts WHERE username=? AND telegram_id<>?",(new_username,session["teacher_id"])).fetchone()
+                if duplicate:
+                    flash("Bu login band. Boshqa login tanlang.")
+                else:
+                    new_hash=hashlib.pbkdf2_hmac("sha256",new_password.encode(),b"neuron-teacher-v1",180000).hex() if new_password else t["password_hash"]
+                    c.execute("UPDATE teacher_accounts SET username=?,password_hash=? WHERE telegram_id=?",(new_username,new_hash,session["teacher_id"]))
+                    flash("Login va xavfsizlik sozlamalari saqlandi.")
+                    return redirect(url_for("teacher_account"))
+    with db() as c:
+        t=c.execute("SELECT * FROM teacher_accounts WHERE telegram_id=?",(session["teacher_id"],)).fetchone()
+    return page("Kabinet sozlamalari", """<section class="card"><p class="eyebrow">NEURON TEACHER</p><h1>🔐 Login va parol sozlamalari</h1><p class="muted">Loginni almashtirish majburiy. Parolni o‘zgartirmasangiz, eski parol saqlanadi. O‘zgarishlarni tasdiqlash uchun amaldagi parolingizni kiriting.</p><form method="post"><label>Yangi login</label><input name="username" value="{{t['username'] or ''}}" minlength="4" maxlength="32" pattern="[A-Za-z0-9_.-]+" required autocomplete="username"><label>Yangi parol (ixtiyoriy)</label><input name="new_password" type="password" minlength="8" autocomplete="new-password" placeholder="O‘zgartirmasangiz bo‘sh qoldiring"><label>Yangi parolni takrorlang</label><input name="confirm_password" type="password" autocomplete="new-password"><label>Amaldagi parol</label><input name="current_password" type="password" required autocomplete="current-password"><button class="full">💾 O‘zgarishlarni saqlash</button></form><a class="btn secondary full" href="/teacher/cabinet">← Kabinetga qaytish</a></section>""",t=t)
 
 @app.get("/teacher/register")
 def teacher_register_page():
