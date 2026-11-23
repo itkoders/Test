@@ -117,7 +117,7 @@ def take_test(test_id):
     {% for v in ['A','B','C','D'] %}<label class="bubble"><input type="radio" name="q{{i}}" value="{{v}}"><span>{{v}}</span></label>{% endfor %}
     </div><input name="q{{i}}_text" placeholder="Yopiq savol: javobni shu yerga yozing" aria-label="{{i}}-savol yozma javobi"></div></div></div>{% endfor %}
     <button class="full" type="submit">Testni yakunlash ✓</button></form></section></section></div>
-    <script>let left={{test['duration']}}*60;const el=document.getElementById('clock');const form=document.getElementById('answerForm');function tick(){let m=Math.floor(left/60),s=left%60;el.textContent=m+':'+String(s).padStart(2,'0');if(left<=0){form.submit();return;}left--;}let focusWarning=false;let openingTestFile=false;const fileLink=document.getElementById("testFileLink");if(fileLink){fileLink.addEventListener("click",()=>{openingTestFile=true;setTimeout(()=>{openingTestFile=false;},15000);});}document.addEventListener("visibilitychange",()=>{if(document.hidden){if(openingTestFile){return;}focusWarning=true;alert("Diqqat: test oynasidan chiqdingiz. Bu holat o‘qituvchiga qayd etiladi.");}else{openingTestFile=false;}});form.addEventListener("submit",function(){if(focusWarning){const h=document.createElement("input");h.type="hidden";h.name="focus_warning";h.value="1";form.appendChild(h);}});tick();setInterval(tick,1000);</script>
+    <script>let left={{test['duration']}}*60;const el=document.getElementById('clock');const form=document.getElementById('answerForm');let focusWarnings=0,openingTestFile=false,submitted=false;function finish(){if(submitted)return;submitted=true;const h=document.createElement('input');h.type='hidden';h.name='focus_warning_count';h.value=String(focusWarnings);form.appendChild(h);form.submit();}function tick(){let m=Math.floor(left/60),s=left%60;el.textContent=m+':'+String(s).padStart(2,'0');if(left<=0){finish();return;}left--;}const fileLink=document.getElementById("testFileLink");if(fileLink){fileLink.addEventListener("click",()=>{openingTestFile=true;setTimeout(()=>{openingTestFile=false;},20000);});}document.addEventListener("visibilitychange",()=>{if(document.hidden){if(openingTestFile)return;focusWarnings++;alert("Diqqat! Oyna almashishi qayd etildi ("+focusWarnings+"/2). Ikkinchi ogohlantirishda test avtomatik yakunlanadi.");if(focusWarnings>=2){alert("Ikki ogohlantirish: test yakunlanib, o‘qituvchi tekshiruviga yuboriladi.");finish();}}else{openingTestFile=false;}});form.addEventListener('submit',e=>{if(!submitted){e.preventDefault();finish();}});tick();setInterval(tick,1000);</script>
     """,test=test,candidate=candidate,count=count,file_url=url_for("test_file",test_id=test_id,token=file_signer.dumps({"test_id":test_id,"name":candidate["name"]})))
 
 @app.get("/testfile/<int:test_id>/<token>")
@@ -162,11 +162,17 @@ def submit_test(test_id):
         else:
             auto_total+=1
             if answer.casefold()==str(correct).strip().casefold(): score+=1
-    total=len(key); pending=bool(manual); percent=round(score*100/total) if total else 0
+    total=len(key)
+    try: warnings=max(0,min(10,int(request.form.get("focus_warning_count","0"))))
+    except Exception: warnings=0
+    percent=round(score*100/total) if total else 0
     cert="NR-"+secrets.token_hex(4).upper()
     with db() as c:
-        c.execute("INSERT INTO results(test_id,full_name,student_id,score,total,percent,cert_id,created_at,manual_answers,review_status,focus_warning) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-        (test_id,candidate["name"],"",score,total,percent,cert,datetime.utcnow().isoformat(),json.dumps(manual,ensure_ascii=False),"pending" if pending else "checked",1 if request.form.get("focus_warning")=="1" else 0))
+        cur=c.execute("INSERT INTO results(test_id,full_name,student_id,score,total,percent,cert_id,created_at,manual_answers,review_status,focus_warning) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (test_id,candidate["name"],"",score,total,percent,cert,datetime.utcnow().isoformat(),json.dumps(manual,ensure_ascii=False),"pending" if manual else "checked",warnings))
+        result_id=cur.lastrowid
+    try: notify_teacher("🧪 NEURON — Yangi test\\nO‘quvchi: "+candidate["name"]+"\\nTest: "+test["title"]+"\\nNatija: "+str(score)+"/"+str(total)+" ("+str(percent)+"%)\\nYopiq savollar: "+str(len(manual))+"\\nOgohlantirishlar: "+str(warnings)+"\\nID: "+str(result_id))
+    except Exception: app.logger.exception("Teacher notification failed")
     session.pop("candidate",None); session.pop("started_at",None)
     return redirect(url_for("certificate", cert_id=cert))
 
@@ -174,7 +180,7 @@ def submit_test(test_id):
 def certificate(cert_id):
     with db() as c: r=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id WHERE cert_id=?", (cert_id,)).fetchone()
     if not r: abort(404)
-    level="Tekshiruv kutilmoqda" if r["review_status"]=="pending" else "A’lo" if r["percent"]>=90 else "Yaxshi" if r["percent"]>=70 else "Qoniqarli" if r["percent"]>=50 else "Ishtirok etdi"
+    level="O‘qituvchi tekshiruvi kutilmoqda" if r["review_status"]=="pending" or int(r["focus_warning"] or 0)>=2 else "A’lo" if r["percent"]>=90 else "Yaxshi" if r["percent"]>=70 else "Qoniqarli" if r["percent"]>=50 else "Ishtirok etdi"
     return page("Natija va sertifikat", """
     <section class="card" style="text-align:center"><p class="eyebrow">NEURON NATIJA</p><h1>{{r['full_name']}}</h1><p class="muted">{{r['title']}}</p>
     <div class="stat"><b>{{r['score']}} / {{r['total']}}</b>{{r['percent']}}% avtomatik baholangan natija</div><h2>{{level}}</h2>
@@ -186,7 +192,7 @@ def certificate_pdf(cert_id):
     with db() as c:
         r=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id WHERE cert_id=?",(cert_id,)).fetchone()
     if not r: abort(404)
-    if r["review_status"]=="pending": return "Yopiq savollar tekshirilgach sertifikat yuklab olish mumkin.",409
+    if r["review_status"]=="pending" or int(r["focus_warning"] or 0)>=2: return "O‘qituvchi tekshiruvi tugamaguncha sertifikat yuklab olinmaydi.",409
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -223,7 +229,13 @@ def admin_login():
 def dashboard():
     with db() as c:
         tests=c.execute("SELECT * FROM tests ORDER BY id DESC").fetchall()
-        results=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id ORDER BY results.id DESC LIMIT 100").fetchall()
+        raw_results=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id ORDER BY results.id DESC LIMIT 100").fetchall()
+    results=[]
+    for item in raw_results:
+        item=dict(item)
+        try: item["manual_items"]=json.loads(item.get("manual_answers") or "[]")
+        except Exception: item["manual_items"]=[]
+        results.append(item)
     return page("Admin panel", """
     <section class="card"><p class="eyebrow">NEURON ADMINISTRATORI</p><h1>Testlarni boshqarish</h1>
     <p class="muted">Test savollari fayl ko‘rinishida yuklanadi. O‘quvchi faylni ko‘rib, Mini App’da javoblarni belgilaydi.</p>
@@ -276,8 +288,7 @@ def dashboard():
     countInput.addEventListener('input',drawKeys);drawKeys();
     </script>
     <section class="card"><h2>Mavjud testlar</h2>{% for t in tests %}<div class="question"><b>{{t['title']}}</b><p class="muted">Kod: {{t['code']}} · {{t['question_count']}} savol · {{t['duration']}} daqiqa · {{t['file_name'] or 'Eski test'}}</p></div>{% else %}<p class="muted">Hozircha test yo‘q.</p>{% endfor %}</section>
-    <section class="card"><h2>Oxirgi natijalar</h2>{% for r in results %}<div class="question"><p>{{r['full_name']}} — {{r['title']}} — <b>{{r['percent']}}%</b> · {{'O‘qituvchi tekshiruvi kutilmoqda' if r['review_status']=='pending' else r['cert_id']}}{% if r['focus_warning'] %} · <b>Oyna almashgan (tekshiring)</b>{% endif %}</p>
-    {% if r['review_status']=='pending' %}<p class="muted">Yopiq javoblar: {{r['manual_answers']}}</p><form method="post" action="/admin/review/{{r['id']}}"><label>Yopiq savollardan nechta to‘g‘ri? (0 dan {{r['manual_answers']|length}} gacha)</label><input name="manual_score" type="number" min="0" max="200" value="0" required><button>Tekshiruvni yakunlash</button></form>{% endif %}</div>{% else %}<p class="muted">Natijalar hali yo‘q.</p>{% endfor %}<a class="btn dark" href="/admin/logout">Chiqish</a></section>
+    <section class="card"><h2>Natijalar va tekshiruvlar</h2>{% for r in results %}<div class="question"><p><b>{{r['full_name']}}</b> — {{r['title']}} — <b>{{r['percent']}}%</b></p><p class="muted">Holat: {{'Tekshiruv kutilmoqda' if r['review_status']=='pending' else 'Sertifikat tayyor' if r['review_status']=='checked' else r['review_status']}} · ID: {{r['cert_id']}}</p>{% if r['focus_warning']|int >= 2 %}<p><b>⚠️ Test bloklangan: {{r['focus_warning']}} ogohlantirish.</b></p><form method="post" action="/admin/clearflag/{{r['id']}}"><button class="secondary">Blokni bekor qilish</button></form>{% endif %}{% if r['review_status']=='pending' %}<form method="post" action="/admin/review/{{r['id']}}"><h3>Yopiq savollar — rubrika</h3>{% for item in r['manual_items'] %}<div class="filebox"><b>{{item['question']}}-savol</b><p>{{item['answer'] or 'Javob kiritilmagan'}}</p><label>Baholash (1 ballik mezon)</label><select name="manual_score_{{loop.index0}}"><option value="0">Noto‘g‘ri — 0</option><option value="0.5">Qisman — 0.5</option><option value="1">To‘g‘ri — 1</option></select></div>{% endfor %}<button>Baholashni saqlash</button></form>{% endif %}</div>{% else %}<p>Natijalar yo‘q.</p>{% endfor %}<a class="btn dark" href="/admin/logout">Chiqish</a></section>
     """,tests=tests,results=results)
 
 @app.post("/admin/create")
@@ -321,14 +332,27 @@ def review_result(result_id):
         try: manual=json.loads(r["manual_answers"] or "[]")
         except Exception: manual=[]
         n=len(manual)
-        try: got=int(request.form.get("manual_score","0"))
+        try: got=sum(float(request.form.get(f"manual_score_{i}","0")) for i in range(n))
         except Exception: got=-1
         if got<0 or got>n:
-            flash("Yopiq savollar uchun kiritilgan ball noto‘g‘ri."); return redirect(url_for("dashboard"))
-        final_score=int(r["score"])+got
-        percent=round(final_score*100/int(r["total"])) if r["total"] else 0
+            flash("Rubrika ballari noto‘g‘ri."); return redirect(url_for("dashboard"))
+        final_score=float(r["score"])+got
+        percent=round(final_score*100/float(r["total"])) if r["total"] else 0
         c.execute("UPDATE results SET score=?,percent=?,manual_score=?,review_status='checked' WHERE id=?",(final_score,percent,got,result_id))
-    flash("Yopiq savollar tekshirildi. Yakuniy natija va sertifikat tayyor.")
+        student=r["full_name"]; cert=r["cert_id"]
+    try: notify_teacher("✅ NEURON — Rubrika saqlandi\\nO‘quvchi: "+student+"\\nYakuniy ball: "+str(final_score)+"/"+str(r["total"])+"\\nNatija: "+str(percent)+"%\\nSertifikat: "+cert)
+    except Exception: app.logger.exception("Teacher review notification failed")
+    flash("Yopiq savollar baholandi. Agar test bloklangan bo‘lsa, blokni alohida bekor qiling.")
+    return redirect(url_for("dashboard"))
+
+@app.post("/admin/clearflag/<int:result_id>")
+@admin_required
+def clear_test_flag(result_id):
+    with db() as c:
+        r=c.execute("SELECT id FROM results WHERE id=?",(result_id,)).fetchone()
+        if not r: abort(404)
+        c.execute("UPDATE results SET focus_warning=0 WHERE id=?",(result_id,))
+    flash("Test blokidan chiqarildi.")
     return redirect(url_for("dashboard"))
 
 @app.get("/admin/logout")
@@ -344,6 +368,17 @@ def telegram_api(method,payload):
     if not BOT_TOKEN: return None
     req=urllib.request.Request(f"https://api.telegram.org/bot{BOT_TOKEN}/{method}",data=json.dumps(payload).encode(),headers={"Content-Type":"application/json"},method="POST")
     with urllib.request.urlopen(req,timeout=12) as response: return json.loads(response.read().decode())
+
+TEACHER_CHAT_ID=os.environ.get("TEACHER_CHAT_ID","").strip()
+def notify_teacher(message):
+    if not BOT_TOKEN or not TEACHER_CHAT_ID:
+        app.logger.error("Teacher alert not configured: BOT_TOKEN or TEACHER_CHAT_ID missing")
+        return False
+    result=telegram_api("sendMessage",{"chat_id":TEACHER_CHAT_ID,"text":message,"reply_markup":{"inline_keyboard":[[{"text":"📋 O‘qituvchi paneli","url":"https://mirzayev-group.onrender.com/admin"}]]}})
+    if not result or not result.get("ok"):
+        app.logger.error("Teacher Telegram notification failed: %s",result)
+        return False
+    return True
 
 @app.post("/telegram/webhook")
 def telegram_webhook():
