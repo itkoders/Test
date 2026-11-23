@@ -28,7 +28,7 @@ def init_db():
             score INTEGER NOT NULL, total INTEGER NOT NULL, percent INTEGER NOT NULL,
             cert_id TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL)""")
         cols = {r["name"] for r in c.execute("PRAGMA table_info(tests)").fetchall()}
-        for name, typ in [("file_name","TEXT"),("file_data","BLOB"),("answer_key","TEXT"),("question_count","INTEGER NOT NULL DEFAULT 0")]:
+        for name, typ in [("file_name","TEXT"),("file_data","BLOB"),("answer_key","TEXT"),("question_count","INTEGER NOT NULL DEFAULT 0"),("manual_answers","TEXT"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0")]:
             if name not in cols:
                 c.execute(f"ALTER TABLE tests ADD COLUMN {name} {typ}")
 
@@ -50,7 +50,7 @@ label{font-weight:650;font-size:14px}.btn,button{display:inline-flex;align-items
 .stat{padding:17px;background:#f6f8ff;border-radius:14px}.stat b{display:block;font-size:25px}.filebox{border:1px dashed #9eafd2;background:#f7f9ff;border-radius:16px;padding:20px;text-align:center}
 .question{border:1px solid var(--line);border-radius:15px;padding:16px;margin:12px 0}.answer-row{display:grid;grid-template-columns:48px 1fr;align-items:center;gap:12px;margin:10px 0}.qnum{background:#eef2ff;color:#315efb;border-radius:12px;padding:11px;text-align:center;font-weight:800}
 iframe{width:100%;height:68vh;border:1px solid var(--line);border-radius:14px;background:white}.docx-view{max-height:68vh;overflow:auto;border:1px solid var(--line);border-radius:14px;padding:18px;background:white;line-height:1.7}
-.timer{position:sticky;top:8px;z-index:3;background:#101b36;color:white;border-radius:13px;padding:12px 16px;text-align:center;font-weight:800}
+.bubbles{display:flex;gap:9px;flex-wrap:wrap;margin:10px 0}.bubble{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border:1px solid #ccd5e5;border-radius:50%;background:#fff;color:#263653;font-weight:800;cursor:pointer}.bubble input{display:none}.bubble:has(input:checked){background:#315efb;color:#fff;border-color:#315efb}.timer{position:sticky;top:8px;z-index:3;background:#101b36;color:white;border-radius:13px;padding:12px 16px;text-align:center;font-weight:800}
 footer{text-align:center;color:#8994a8;padding:22px;font-size:12px}
 @media(max-width:600px){main{margin:16px auto}.card{padding:18px;border-radius:16px}header{padding:15px 18px}.answer-row{grid-template-columns:40px 1fr}.btn,button{width:100%}}
 </style></head><body><header><div class="brand">NEURON<span>.</span></div><div>ONLAYN TEST PLATFORMASI</div></header><main>
@@ -104,15 +104,13 @@ def take_test(test_id):
     <div class="grid"><section class="card"><p class="eyebrow">TEST TOPSHIRISH</p><h1>{{test['title']}}</h1>
     <p class="muted">{{candidate['name']}} · {{count}} ta savol</p><div class="timer">⏱ Qolgan vaqt: <span id="clock">{{test['duration']}}:00</span></div>
     <p class="muted">Savollarni hujjatdan o‘qing. Javoblarni o‘ng/ pastdagi bo‘limda belgilang.</p>
-    {% if test['file_name'] %}<a class="btn secondary full" href="/testfile/{{test['id']}}" target="_blank">📄 Faylni alohida oynada ochish</a>{% endif %}
-    </section><section class="card"><h2>Javoblar varaqasi</h2><form id="answerForm" method="post" action="/submit/{{test['id']}}">
-    {% for i in range(1,count+1) %}<div class="answer-row"><div class="qnum">{{i}}</div><div>
-    <select name="q{{i}}" aria-label="{{i}}-savol javobi"><option value="">Javobni tanlang</option>
-    <option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option>
-    <option value="TRUE">To‘g‘ri</option><option value="FALSE">Noto‘g‘ri</option>
-    </select><input name="q{{i}}_text" placeholder="Yoki qisqa javobni yozing" aria-label="{{i}}-savol qisqa javobi" style="margin-top:6px"></div></div>{% endfor %}
-    <button class="full" type="submit">Testni yakunlash ✓</button></form></section></div>
-    <script>let left={{test['duration']}}*60;const el=document.getElementById('clock');const form=document.getElementById('answerForm');function tick(){let m=Math.floor(left/60),s=left%60;el.textContent=m+':'+String(s).padStart(2,'0');if(left<=0){form.submit();return;}left--;}form.addEventListener("submit",function(e){for(const row of form.querySelectorAll(".answer-row")){const sel=row.querySelector("select"),txt=row.querySelector("input");if(!sel.value&&!txt.value.trim()){e.preventDefault();alert("Barcha savollarga javob bering.");return;}}});tick();setInterval(tick,1000);</script>
+    {% if test['file_name'] %}<a class="btn secondary full" href="/testfile/{{test['id']}}" target="_blank">📄 Test faylini ko‘rish</a>{% endif %}
+    </section><section class="card"><h2>Javoblar varaqasi</h2><p class="muted">Har bir savol uchun variantni bosing. Yopiq savollarga yozma javob kiriting.</p><form id="answerForm" method="post" action="/submit/{{test['id']}}">
+    {% for i in range(1,count+1) %}<div class="question"><div class="answer-row"><div class="qnum">{{i}}</div><div><b>{{i}}-savol</b><div class="bubbles">
+    {% for v in ['A','B','C','D'] %}<label class="bubble"><input type="radio" name="q{{i}}" value="{{v}}"><span>{{v}}</span></label>{% endfor %}
+    </div><input name="q{{i}}_text" placeholder="Yopiq savol: javobni shu yerga yozing" aria-label="{{i}}-savol yozma javobi"></div></div></div>{% endfor %}
+    <button class="full" type="submit">Testni yakunlash ✓</button></form></section></section></div>
+    <script>let left={{test['duration']}}*60;const el=document.getElementById('clock');const form=document.getElementById('answerForm');function tick(){let m=Math.floor(left/60),s=left%60;el.textContent=m+':'+String(s).padStart(2,'0');if(left<=0){form.submit();return;}left--;}let focusWarning=false;document.addEventListener("visibilitychange",()=>{if(document.hidden){focusWarning=true;alert("Diqqat: test oynasidan chiqdingiz. Bu holat o‘qituvchiga qayd etiladi.");}});form.addEventListener("submit",function(){if(focusWarning){const h=document.createElement("input");h.type="hidden";h.name="focus_warning";h.value="1";form.appendChild(h);}});tick();setInterval(tick,1000);</script>
     """,test=test,candidate=candidate,count=count)
 
 @app.get("/testfile/<int:test_id>")
@@ -122,7 +120,7 @@ def test_file(test_id):
     if not test or not candidate or candidate["test_id"]!=test_id or not test["file_data"]: abort(404)
     name=test["file_name"] or "test"
     if name.lower().endswith(".pdf"):
-        return send_file(io.BytesIO(test["file_data"]), mimetype="application/pdf", download_name=name)
+        return send_file(io.BytesIO(test["file_data"]), mimetype="application/pdf", download_name=name, as_attachment=False)
     try:
         from docx import Document
         doc=Document(io.BytesIO(test["file_data"]))
@@ -145,12 +143,19 @@ def submit_test(test_id):
     try: key=json.loads(test["answer_key"] or "[]")
     except Exception: key=[]
     if not key: abort(400, "Javoblar kaliti mavjud emas.")
-    score=sum(1 for i,correct in enumerate(key,1) if (request.form.get(f"q{i}_text","").strip() or request.form.get(f"q{i}","").strip()).casefold()==str(correct).strip().casefold())
-    total=len(key); percent=round(score*100/total) if total else 0
+    manual=[]
+    score=0; auto_total=0
+    for i,correct in enumerate(key,1):
+        answer=(request.form.get(f"q{i}_text","").strip() or request.form.get(f"q{i}","").strip())
+        if str(correct).strip().upper()=="MANUAL": manual.append({"question":i,"answer":answer})
+        else:
+            auto_total+=1
+            if answer.casefold()==str(correct).strip().casefold(): score+=1
+    total=len(key); pending=bool(manual); percent=round(score*100/total) if total else 0
     cert="NR-"+secrets.token_hex(4).upper()
     with db() as c:
-        c.execute("INSERT INTO results(test_id,full_name,student_id,score,total,percent,cert_id,created_at) VALUES(?,?,?,?,?,?,?,?)",
-        (test_id,candidate["name"],"",score,total,percent,cert,datetime.utcnow().isoformat()))
+        c.execute("INSERT INTO results(test_id,full_name,student_id,score,total,percent,cert_id,created_at,manual_answers,review_status,focus_warning) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (test_id,candidate["name"],"",score,total,percent,cert,datetime.utcnow().isoformat(),json.dumps(manual,ensure_ascii=False),"pending" if pending else "checked",1 if request.form.get("focus_warning")=="1" else 0))
     session.pop("candidate",None); session.pop("started_at",None)
     return redirect(url_for("certificate", cert_id=cert))
 
@@ -158,11 +163,11 @@ def submit_test(test_id):
 def certificate(cert_id):
     with db() as c: r=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id WHERE cert_id=?", (cert_id,)).fetchone()
     if not r: abort(404)
-    level="A’lo" if r["percent"]>=90 else "Yaxshi" if r["percent"]>=70 else "Qoniqarli" if r["percent"]>=50 else "Ishtirok etdi"
+    level="Tekshiruv kutilmoqda" if r["review_status"]=="pending" else "A’lo" if r["percent"]>=90 else "Yaxshi" if r["percent"]>=70 else "Qoniqarli" if r["percent"]>=50 else "Ishtirok etdi"
     return page("Natija va sertifikat", """
     <section class="card" style="text-align:center"><p class="eyebrow">NEURON NATIJA</p><h1>{{r['full_name']}}</h1><p class="muted">{{r['title']}}</p>
-    <div class="stat"><b>{{r['score']}} / {{r['total']}}</b>{{r['percent']}}% natija</div><h2>{{level}}</h2>
-    <p class="muted">Sertifikat ID: {{r['cert_id']}}</p><button onclick="window.print()">Sertifikatni PDF saqlash / chop etish</button></section>
+    <div class="stat"><b>{{r['score']}} / {{r['total']}}</b>{{r['percent']}}% avtomatik baholangan natija</div><h2>{{level}}</h2>
+    {% if r['review_status']=='pending' %}<p class="muted">Yopiq savollaringiz o‘qituvchi tomonidan tekshirilgach yakuniy natija va sertifikat tayyor bo‘ladi.</p>{% else %}<p class="muted">Sertifikat ID: {{r['cert_id']}}</p><button onclick="window.print()">Sertifikatni PDF saqlash / chop etish</button>{% endif %}</section>
     """,r=r,level=level)
 
 @app.route("/admin", methods=["GET","POST"])
@@ -206,7 +211,7 @@ def dashboard():
       keyRows.innerHTML='';
       for(let i=1;i<=n;i++){
         const row=document.createElement('div');row.className='key-row';row.dataset.type='mcq';
-        row.innerHTML='<div class="key-head"><span>'+i+'-savol</span><span class="muted">Kalit</span></div><select class="key-type"><option value="mcq">A / B / C / D</option><option value="tf">To‘g‘ri / Noto‘g‘ri</option><option value="short">Qisqa yozma javob</option></select><div class="bubbles"></div><input class="short-answer" type="text" maxlength="80" placeholder="To‘g‘ri javob matni">';
+        row.innerHTML='<div class="key-head"><span>'+i+'-savol</span><span class="muted">Kalit</span></div><select class="key-type"><option value="mcq">A / B / C / D</option><option value="tf">To‘g‘ri / Noto‘g‘ri</option><option value="short">Qisqa yozma javob (avtomatik)</option><option value="manual">Yopiq savol (o‘qituvchi tekshiradi)</option></select><div class="bubbles"></div><input class="short-answer" type="text" maxlength="80" placeholder="To‘g‘ri javob matni">';
         const type=row.querySelector('.key-type');
         function options(){
           row.dataset.type=type.value;
@@ -224,7 +229,7 @@ def dashboard():
     }
     function syncKeys(){
       const rows=[...keyRows.querySelectorAll('.key-row')];
-      const vals=rows.map(row=>row.dataset.type==='short'?row.querySelector('.short-answer').value.trim():(row.querySelector('input[type=radio]:checked')?.value||''));
+      const vals=rows.map(row=>row.dataset.type==='short'?row.querySelector('.short-answer').value.trim():row.dataset.type==='manual'?'MANUAL':(row.querySelector('input[type=radio]:checked')?.value||''));
       const done=vals.filter(Boolean).length;
       keyProgress.textContent=done+' / '+rows.length+' ta javob belgilandi';
       keyHidden.value=vals.join(',');
@@ -233,7 +238,7 @@ def dashboard():
     countInput.addEventListener('input',drawKeys);drawKeys();
     </script>
     <section class="card"><h2>Mavjud testlar</h2>{% for t in tests %}<div class="question"><b>{{t['title']}}</b><p class="muted">Kod: {{t['code']}} · {{t['question_count']}} savol · {{t['duration']}} daqiqa · {{t['file_name'] or 'Eski test'}}</p></div>{% else %}<p class="muted">Hozircha test yo‘q.</p>{% endfor %}</section>
-    <section class="card"><h2>Oxirgi natijalar</h2>{% for r in results %}<p>{{r['full_name']}} — {{r['title']}} — <b>{{r['percent']}}%</b> · {{r['cert_id']}}</p>{% else %}<p class="muted">Natijalar hali yo‘q.</p>{% endfor %}<a class="btn dark" href="/admin/logout">Chiqish</a></section>
+    <section class="card"><h2>Oxirgi natijalar</h2>{% for r in results %}<p>{{r['full_name']}} — {{r['title']}} — <b>{{r['percent']}}%</b> · {{'O‘qituvchi tekshiruvi kutilmoqda' if r['review_status']=='pending' else r['cert_id']}}{% if r['focus_warning'] %} · <b>Oyna almashgan</b>{% endif %}</p>{% else %}<p class="muted">Natijalar hali yo‘q.</p>{% endfor %}<a class="btn dark" href="/admin/logout">Chiqish</a></section>
     """,tests=tests,results=results)
 
 @app.post("/admin/create")
@@ -257,7 +262,7 @@ def create_test():
     if len(answers)!=count:
         flash(f"Savollar soni {count}, javoblar kaliti esa {len(answers)} ta. Ikkalasini teng qiling."); return redirect(url_for("dashboard"))
     allowed={"A","B","C","D","TRUE","FALSE","TO‘G‘RI","NOTO‘G‘RI"}
-    if any(a.upper() not in allowed and len(a)>80 for a in answers):
+    if any(a.upper() not in allowed and a.upper()!="MANUAL" and len(a)>80 for a in answers):
         flash("Javob kalitidagi matn juda uzun."); return redirect(url_for("dashboard"))
     code=request.form.get("code","").strip().upper() or "".join(secrets.choice(string.ascii_uppercase+string.digits) for _ in range(6))
     try:
