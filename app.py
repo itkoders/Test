@@ -1,4 +1,11 @@
 import os, sqlite3, secrets, string, json, hashlib, urllib.request, urllib.error, io
+import re
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+except ImportError:
+    psycopg2 = None
+    RealDictCursor = None
 from datetime import datetime
 from functools import wraps
 from flask import Flask, request, redirect, url_for, session, flash, render_template_string, abort, send_file, Response
@@ -10,15 +17,69 @@ app.secret_key = os.environ.get("SECRET_KEY", "change-this-before-production")
 file_signer = URLSafeTimedSerializer(app.secret_key, salt="neuron-test-file-v1")
 app.config["MAX_CONTENT_LENGTH"] = 18 * 1024 * 1024
 DB = os.environ.get("DATABASE_PATH", "mirzayev_group.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+DATABASE_SCHEMA = re.sub(r"[^a-zA-Z0-9_]", "", os.environ.get("DATABASE_SCHEMA", "neuron_test")) or "neuron_test"
 ADMIN_USER = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 
+class PgCursor:
+    def __init__(self, cursor): self.cursor = cursor
+    def fetchone(self): return self.cursor.fetchone()
+    def fetchall(self): return self.cursor.fetchall()
+    @property
+    def lastrowid(self): return None
+
+class PgConnection:
+    def __init__(self):
+        if not psycopg2: raise RuntimeError("psycopg2 package is required for Neon DATABASE_URL")
+        self.conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor, connect_timeout=12)
+        self.conn.autocommit = False
+        with self.conn.cursor() as cur: cur.execute(f'SET search_path TO "{DATABASE_SCHEMA}"')
+    def execute(self, sql, params=()):
+        sql = sql.replace("?", "%s")
+        cur = self.conn.cursor()
+        cur.execute(sql, params)
+        return PgCursor(cur)
+    def __enter__(self): return self
+    def __exit__(self, typ, value, tb):
+        try:
+            self.conn.rollback() if typ else self.conn.commit()
+        finally: self.conn.close()
+
 def db():
+    if DATABASE_URL: return PgConnection()
     c = sqlite3.connect(DB)
     c.row_factory = sqlite3.Row
     return c
 
 def init_db():
+    if DATABASE_URL:
+        with psycopg2.connect(DATABASE_URL, connect_timeout=12) as raw:
+            with raw.cursor() as cur:
+                cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{DATABASE_SCHEMA}"')
+                cur.execute(f'SET search_path TO "{DATABASE_SCHEMA}"')
+                cur.execute("""CREATE TABLE IF NOT EXISTS tests(
+                    id BIGSERIAL PRIMARY KEY, title TEXT NOT NULL, code TEXT UNIQUE NOT NULL,
+                    duration INTEGER NOT NULL DEFAULT 30, questions TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL, file_name TEXT, file_data BYTEA, answer_key TEXT,
+                    question_count INTEGER NOT NULL DEFAULT 0, manual_answers TEXT,
+                    review_status TEXT NOT NULL DEFAULT 'checked', focus_warning INTEGER NOT NULL DEFAULT 0,
+                    manual_score DOUBLE PRECISION NOT NULL DEFAULT 0)""")
+                cur.execute("""CREATE TABLE IF NOT EXISTS results(
+                    id BIGSERIAL PRIMARY KEY, test_id BIGINT NOT NULL, full_name TEXT NOT NULL,
+                    student_id TEXT NOT NULL DEFAULT '', score DOUBLE PRECISION NOT NULL,
+                    total INTEGER NOT NULL, percent INTEGER NOT NULL, cert_id TEXT UNIQUE NOT NULL,
+                    created_at TEXT NOT NULL, manual_answers TEXT NOT NULL DEFAULT '[]',
+                    review_status TEXT NOT NULL DEFAULT 'checked', focus_warning INTEGER NOT NULL DEFAULT 0,
+                    manual_score DOUBLE PRECISION NOT NULL DEFAULT 0)""")
+                cur.execute("""CREATE TABLE IF NOT EXISTS teacher_accounts(
+                    telegram_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, full_name TEXT NOT NULL DEFAULT '',
+                    subject TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'pending', stage TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL, username TEXT UNIQUE, password_hash TEXT)""")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_neuron_test_results_test ON results(test_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_neuron_test_teachers_status ON teacher_accounts(status)")
+        return
     with db() as c:
         c.execute("""CREATE TABLE IF NOT EXISTS tests(
             id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
@@ -31,13 +92,10 @@ def init_db():
             cert_id TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL)""")
         cols = {r["name"] for r in c.execute("PRAGMA table_info(tests)").fetchall()}
         for name, typ in [("file_name","TEXT"),("file_data","BLOB"),("answer_key","TEXT"),("question_count","INTEGER NOT NULL DEFAULT 0"),("manual_answers","TEXT"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0")]:
-            if name not in cols:
-                c.execute(f"ALTER TABLE tests ADD COLUMN {name} {typ}")
-        # Safe migration for existing databases created before manual review fields existed.
+            if name not in cols: c.execute(f"ALTER TABLE tests ADD COLUMN {name} {typ}")
         result_cols = {r["name"] for r in c.execute("PRAGMA table_info(results)").fetchall()}
         for name, typ in [("manual_answers","TEXT NOT NULL DEFAULT '[]'"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0")]:
-            if name not in result_cols:
-                c.execute(f"ALTER TABLE results ADD COLUMN {name} {typ}")
+            if name not in result_cols: c.execute(f"ALTER TABLE results ADD COLUMN {name} {typ}")
         c.execute("""CREATE TABLE IF NOT EXISTS teacher_accounts(telegram_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, full_name TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', stage TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, username TEXT, password_hash TEXT)""")
         tc={r["name"] for r in c.execute("PRAGMA table_info(teacher_accounts)").fetchall()}
         for n,t in [("username","TEXT"),("password_hash","TEXT")]:
@@ -89,7 +147,7 @@ def home():
     <p class="muted">Test kodini kiriting, savollar faylini ko‘ring va javoblarni Mini App ichida belgilang.</p>
     <form method="post" action="/start"><label>Ism va familiya</label><input name="full_name" required maxlength="100" placeholder="Masalan: Ali Valiyev">
     <label>Test kodi</label><input name="code" required maxlength="30" placeholder="O‘qituvchi bergan kod"><button class="full">Testni boshlash →</button></form>
-    <p class="muted">Adminmisiz? <a href="/admin">Admin panelga kirish</a></p></section>
+    <div class="grid"><a class="btn secondary full" href="/teacher/login">👩‍🏫 O‘qituvchi kabineti</a><a class="btn dark full" href="/admin">🔐 Admin paneli</a></div></section>
     """)
 
 @app.post("/start")
@@ -172,9 +230,9 @@ def submit_test(test_id):
     percent=round(score*100/total) if total else 0
     cert="NR-"+secrets.token_hex(4).upper()
     with db() as c:
-        cur=c.execute("INSERT INTO results(test_id,full_name,student_id,score,total,percent,cert_id,created_at,manual_answers,review_status,focus_warning) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        cur=c.execute("INSERT INTO results(test_id,full_name,student_id,score,total,percent,cert_id,created_at,manual_answers,review_status,focus_warning) VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
         (test_id,candidate["name"],"",score,total,percent,cert,datetime.utcnow().isoformat(),json.dumps(manual,ensure_ascii=False),"pending" if manual else "checked",warnings))
-        result_id=cur.lastrowid
+        result_id=cur.fetchone()["id"]
     try: notify_teacher("🧪 NEURON — Yangi test\\nO‘quvchi: "+candidate["name"]+"\\nTest: "+test["title"]+"\\nNatija: "+str(score)+"/"+str(total)+" ("+str(percent)+"%)\\nYopiq savollar: "+str(len(manual))+"\\nOgohlantirishlar: "+str(warnings)+"\\nID: "+str(result_id))
     except Exception: app.logger.exception("Teacher notification failed")
     session.pop("candidate",None); session.pop("started_at",None)
@@ -241,7 +299,7 @@ def dashboard():
         except Exception: item["manual_items"]=[]
         results.append(item)
     return page("Admin panel", """
-    <section class="card"><p class="eyebrow">NEURON ADMINISTRATORI</p><h1>Testlarni boshqarish</h1><a class="btn secondary" href="/admin/teachers">👩‍🏫 O‘qituvchilarni boshqarish</a>
+    <section class="card"><p class="eyebrow">NEURON ADMINISTRATORI</p><h1>Testlarni boshqarish</h1><div class="grid"><a class="btn secondary full" href="/admin/teachers">👩‍🏫 O‘qituvchilarni boshqarish</a><a class="btn dark full" href="/teacher/login">O‘qituvchi kabineti</a><a class="btn secondary full" href="/">Bosh sahifa</a></div>
     <p class="muted">Test savollari fayl ko‘rinishida yuklanadi. O‘quvchi faylni ko‘rib, Mini App’da javoblarni belgilaydi.</p>
     <form method="post" action="/admin/create" enctype="multipart/form-data">
     <div class="grid"><div><label>Test nomi</label><input name="title" required placeholder="Masalan: Tarix — 1-bosqich"></div>
@@ -366,7 +424,7 @@ def clear_test_flag(result_id):
 @admin_required
 def admin_teachers():
     with db() as c: teachers=c.execute("SELECT * FROM teacher_accounts ORDER BY created_at DESC").fetchall()
-    return page("O‘qituvchilar", """<section class="card"><p class="eyebrow">NEURON ADMIN</p><h1>O‘qituvchilar</h1><p class="muted">Bu bo‘lim test yaratish va test natijalari panelidan alohida ishlaydi.</p>{% for t in teachers %}<div class="question"><b>{{t['full_name'] or 'Ma’lumot kutilmoqda'}}</b> — {{t['subject']}}<p class="muted">📞 {{t['phone']}} · Telegram: {{t['telegram_id']}} · Holat: {{t['status']}}</p>{% if t['status']=='pending' and t['full_name'] %}<form method="post" action="/admin/teacher/{{t['telegram_id']}}/approve"><button class="full">✅ Tasdiqlash va login/parol berish</button></form><form method="post" action="/admin/teacher/{{t['telegram_id']}}/reject"><button class="secondary full">Rad etish</button></form>{% endif %}</div>{% else %}<p class="muted">Arizalar yo‘q.</p>{% endfor %}<a class="btn dark" href="/admin/dashboard">Testlar paneliga qaytish</a></section>""",teachers=teachers)
+    return page("O‘qituvchilar", """<section class="card"><p class="eyebrow">NEURON ADMIN</p><h1>O‘qituvchilar</h1><p><a href="/admin/dashboard">← Testlar paneliga qaytish</a></p><p class="muted">Bu bo‘lim test yaratish va test natijalari panelidan alohida ishlaydi.</p>{% for t in teachers %}<div class="question"><b>{{t['full_name'] or 'Ma’lumot kutilmoqda'}}</b> — {{t['subject']}}<p class="muted">📞 {{t['phone']}} · Telegram: {{t['telegram_id']}} · Holat: {{t['status']}}</p>{% if t['status']=='pending' and t['full_name'] %}<form method="post" action="/admin/teacher/{{t['telegram_id']}}/approve"><button class="full">✅ Tasdiqlash va login/parol berish</button></form><form method="post" action="/admin/teacher/{{t['telegram_id']}}/reject"><button class="secondary full">Rad etish</button></form>{% endif %}</div>{% else %}<p class="muted">Arizalar yo‘q.</p>{% endfor %}<a class="btn dark" href="/admin/dashboard">Testlar paneliga qaytish</a></section>""",teachers=teachers)
 
 @app.post("/admin/teacher/<telegram_id>/approve")
 @admin_required
@@ -410,25 +468,25 @@ def teacher_login():
         if t and t["password_hash"] and secrets.compare_digest(check,t["password_hash"]):
             session["teacher_id"]=t["telegram_id"]; return redirect(url_for("teacher_cabinet"))
         flash("Login yoki parol noto‘g‘ri.")
-    return page("O‘qituvchi kirish", """<section class="card"><p class="eyebrow">NEURON TEACHER</p><h1>O‘qituvchi kabineti</h1><form method="post"><label>Login</label><input name="username" required autocomplete="username"><label>Parol</label><input name="password" type="password" required autocomplete="current-password"><button class="full">Kabinetga kirish</button></form><a href="/teacher/register">Ro‘yxatdan o‘tish</a></section>""")
+    return page("O‘qituvchi kirish", """<section class="card"><p class="eyebrow">NEURON TEACHER</p><h1>O‘qituvchi kabinetiga kirish</h1><p class="muted">Admin tasdiqlagach, login va parol Telegram bot orqali yuboriladi. Hali ro‘yxatdan o‘tmagan bo‘lsangiz, avval ariza yuboring.</p><form method="post"><label>Login</label><input name="username" required autocomplete="username"><label>Parol</label><input name="password" type="password" required autocomplete="current-password"><button class="full">Kabinetga kirish</button></form><a class="btn secondary full" href="/teacher/register">📝 O‘qituvchi sifatida ro‘yxatdan o‘tish</a><p class="muted"><a href="/">Bosh sahifaga qaytish</a></p></section>""")
 
 @app.get("/teacher/register")
 def teacher_register_page():
-    return page("O‘qituvchi ro‘yxati", """<section class="card"><h1>O‘qituvchi bo‘lish</h1><p>Telegram botga o‘ting va pastdagi tugmani bosing.</p><a class="btn full" href="https://t.me/" target="_blank">Telegram botni ochish</a><p class="muted">Botda /teacher buyrug‘i orqali telefon raqamingizni tasdiqlang, ism va faningizni kiriting.</p></section>""")
+    return page("O‘qituvchi ro‘yxati", """<section class="card"><h1>O‘qituvchi bo‘lish</h1><p>Telegram botga o‘ting va pastdagi tugmani bosing.</p><a class="btn full" href="https://t.me/Test2026robot" target="_blank" rel="noopener">Telegram botni ochish</a><p class="muted">Botda /teacher buyrug‘i orqali telefon raqamingizni tasdiqlang, ism va faningizni kiriting.</p></section>""")
 
 @app.get("/teacher/cabinet")
 @teacher_required
 def teacher_cabinet():
     with db() as c:
         t=c.execute("SELECT * FROM teacher_accounts WHERE telegram_id=?",(session["teacher_id"],)).fetchone()
-        rows=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id ORDER BY results.id DESC LIMIT 100").fetchall()
+        rows=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id WHERE lower(tests.title) LIKE lower(?) ORDER BY results.id DESC LIMIT 100", ("%"+t["subject"]+"%",)).fetchall()
     return page("O‘qituvchi kabineti", """<section class="card"><p class="eyebrow">NEURON TEACHER CABINET</p><h1>Assalomu alaykum, {{t['full_name']}}</h1><p class="muted">{{t['subject']}} · {{t['phone']}}</p><div class="grid"><div class="stat"><b>{{rows|length}}</b>Natijalar</div><div class="stat"><b>{{rows|selectattr('review_status','equalto','pending')|list|length}}</b>Tekshiruv kutilmoqda</div></div><h2>O‘quvchilar natijalari</h2>{% for r in rows %}<div class="question"><b>{{r['full_name']}}</b> — {{r['title']}}<p class="muted">{{r['score']}}/{{r['total']}} · {{r['percent']}}% · {{r['created_at']}}</p>{% if r['review_status']=='pending' %}<a class="btn secondary" href="/teacher/review/{{r['id']}}">Yopiq savollarni tekshirish</a>{% endif %}<a class="btn" href="/certificate/{{r['cert_id']}}">Sertifikat / natija</a></div>{% else %}<p>Hozircha natija yo‘q.</p>{% endfor %}<a class="btn dark" href="/teacher/logout">Chiqish</a></section>""",t=t,rows=rows)
 
 @app.route("/teacher/review/<int:result_id>",methods=["GET","POST"])
 @teacher_required
 def teacher_review(result_id):
     with db() as c:
-        r=c.execute("SELECT * FROM results WHERE id=?",(result_id,)).fetchone()
+        r=c.execute("SELECT results.* FROM results JOIN tests ON tests.id=results.test_id WHERE results.id=? AND lower(tests.title) LIKE lower(?)",(result_id,"%"+c.execute("SELECT subject FROM teacher_accounts WHERE telegram_id=?",(session["teacher_id"],)).fetchone()["subject"]+"%")).fetchone()
         if not r: abort(404)
         try: items=json.loads(r["manual_answers"] or "[]")
         except Exception: items=[]
