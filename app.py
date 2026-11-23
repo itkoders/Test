@@ -287,7 +287,24 @@ def start_test():
     session["candidate"]={"name":name,"test_id":test["id"]}
     session["started_at"]=datetime.utcnow().timestamp()
     session["test_deadline"]=session["started_at"]+int(test["duration"] or 30)*60
+    session["focus_warning_count"]=0
     return redirect(url_for("take_test", test_id=test["id"]))
+
+@app.post("/test/<int:test_id>/warning")
+def record_test_warning(test_id):
+    candidate=session.get("candidate")
+    if not candidate or int(candidate.get("test_id",-1))!=test_id:
+        return {"ok":False},403
+    test=get_test(test_id)
+    if not test or not test["is_active"]:
+        return {"ok":False,"closed":True},409
+    deadline=float(session.get("test_deadline",0) or 0)
+    if not deadline or datetime.utcnow().timestamp()>=deadline:
+        return {"ok":False,"closed":True},409
+    try: count=max(0,min(10,int(request.form.get("count","0"))))
+    except Exception: count=0
+    session["focus_warning_count"]=max(int(session.get("focus_warning_count",0) or 0),count)
+    return {"ok":True,"count":session["focus_warning_count"]}
 
 @app.get("/test/<int:test_id>/status")
 def test_status(test_id):
@@ -326,14 +343,14 @@ def take_test(test_id):
     <script>
 const deadline={{(session.get('test_deadline',0)*1000)|int}};
 const el=document.getElementById('clock'),form=document.getElementById('answerForm');
-let focusWarnings=0,openingTestFile=false,submitted=false;
+let focusWarnings={{session.get('focus_warning_count',0)|int}},openingTestFile=false,submitted=false;
 function finish(){if(submitted)return;submitted=true;let h=form.querySelector('[name="focus_warning_count"]');if(!h){h=document.createElement('input');h.type='hidden';h.name='focus_warning_count';form.appendChild(h);}h.value=String(focusWarnings);form.submit();}
 function tick(){const left=Math.max(0,Math.ceil((deadline-Date.now())/1000));el.textContent=Math.floor(left/60)+':'+String(left%60).padStart(2,'0');if(left<=0)finish();}
 const qs=[...document.querySelectorAll('.student-question')],nav=[...document.querySelectorAll('#studentNav [data-go]')];let current=0;
 function show(n){current=Math.max(0,Math.min(qs.length-1,n));qs.forEach((q,i)=>q.hidden=i!==current);document.getElementById('studentProgress').textContent=(current+1)+' / '+qs.length+'-savol';document.getElementById('prevQ').disabled=current===0;document.getElementById('nextQ').textContent=current===qs.length-1?'Oxirgi savol':'Keyingi →';nav.forEach((b,i)=>{const q=qs[i],txt=q.querySelector('input:not([type=radio])');b.style.opacity=q.querySelector('input:checked')||(txt&&txt.value.trim())?'1':'.55';b.style.background=i===current?'#315efb':'';b.style.color=i===current?'white':'';});}
 document.getElementById('prevQ').onclick=()=>show(current-1);document.getElementById('nextQ').onclick=()=>show(current+1);nav.forEach((b,i)=>b.onclick=()=>show(i));form.addEventListener('change',()=>show(current));
 const fileLink=document.getElementById('testFileLink');if(fileLink)fileLink.addEventListener('click',()=>{openingTestFile=true;});
-document.addEventListener('visibilitychange',()=>{if(document.hidden){if(openingTestFile)return;focusWarnings=Math.min(10,focusWarnings+1);const note=document.getElementById('focusNotice');note.hidden=false;note.textContent='⚠️ Test oynasidan chiqish qayd etildi ('+focusWarnings+'/2). Ikkinchi ogohlantirishda test avtomatik yakunlanadi.';if(focusWarnings>=2)finish();}else{openingTestFile=false;tick();}});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){if(openingTestFile)return;focusWarnings=Math.min(10,focusWarnings+1);const note=document.getElementById('focusNotice');note.hidden=false;note.textContent='⚠️ Sizga ogohlantirish berildi ('+focusWarnings+'/2). Bu holat o‘qituvchiga ko‘rinadi.';fetch('/test/{{test["id"]}}/warning',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'count='+encodeURIComponent(focusWarnings),keepalive:true}).catch(()=>{});if(focusWarnings>=2)finish();}else{openingTestFile=false;tick();}});
 form.addEventListener('submit',e=>{if(!submitted){e.preventDefault();if(!confirm('Javoblaringizni yakunlab yuborasizmi?'))return;finish();}});
 show(0);tick();setInterval(tick,500);
 async function syncServer(){try{const r=await fetch('/test/{{test["id"]}}/status',{cache:'no-store'});const data=await r.json();if(!r.ok||!data.active){const note=document.getElementById('focusNotice');note.hidden=false;note.textContent=data.reason==='closed'?'⛔ O‘qituvchi testni yopdi. Javoblar yakunlanmoqda.':'⏰ Belgilangan vaqt tugadi. Test yakunlanmoqda.';finish();}}catch(e){}}
@@ -348,7 +365,7 @@ def test_file(test_id,token):
     except (BadSignature,SignatureExpired,ValueError,TypeError):
         abort(404)
     test=get_test(test_id)
-    if not test or not test["file_data"]: abort(404)
+    if not test or not test["is_active"] or not test["file_data"]: abort(404)
     name=test["file_name"] or "test"
     if name.lower().endswith(".pdf"):
         return send_file(io.BytesIO(test["file_data"]), mimetype="application/pdf", download_name=name, as_attachment=False)
@@ -385,8 +402,8 @@ def submit_test(test_id):
             auto_total+=1
             if answer.casefold()==str(correct).strip().casefold(): score+=1
     total=len(key)
-    try: warnings=max(0,min(10,int(request.form.get("focus_warning_count","0"))))
-    except Exception: warnings=0
+    try: warnings=max(int(session.get("focus_warning_count",0) or 0),max(0,min(10,int(request.form.get("focus_warning_count","0")))))
+    except Exception: warnings=max(0,min(10,int(session.get("focus_warning_count",0) or 0)))
     percent=round(score*100/total) if total else 0
     cert="NR-"+secrets.token_hex(4).upper()
     with db() as c:
