@@ -190,9 +190,48 @@ def dashboard():
     <div><label>Davomiyligi (daqiqada)</label><input name="duration" type="number" min="1" max="240" value="30" required></div>
     <div><label>Savollar soni</label><input name="question_count" type="number" min="1" max="200" required placeholder="Masalan: 25"></div></div>
     <label>Test fayli (PDF yoki DOCX, 15 MB gacha)</label><div class="filebox">📎 <b>Test hujjatini yuklang</b><input type="file" name="test_file" accept=".pdf,.docx" required></div>
-    <h2 style="margin-top:20px">Javoblar kaliti</h2><p class="muted">Har bir savol javobini vergul bilan ajrating. Masalan: A,B,C,D,A yoki TRUE,FALSE. Qisqa yopiq javoblar uchun ham aniq javob matnini kiriting.</p>
-    <label>To‘g‘ri javoblar (1-savoldan boshlab)</label><textarea name="answer_key" rows="4" required placeholder="A,B,C,D,A,TRUE,FALSE"></textarea>
+    <h2 style="margin-top:20px">Javoblar kaliti</h2><p class="muted">EvalBee uslubida har bir savol uchun to‘g‘ri javobni tanlang. Savol turini ham o‘zgartirishingiz mumkin.</p>
+    <div id="keyProgress" class="muted" style="margin:10px 0">0 / 0 ta javob belgilandi</div>
+    <div id="keyRows" class="key-grid"></div>
+    <input type="hidden" name="answer_key" id="answerKey" required>
+    <style>.key-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:10px}.key-row{border:1px solid #e5eaf3;border-radius:14px;padding:12px;background:#fbfcff}.key-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-weight:800}.bubbles{display:flex;gap:7px;flex-wrap:wrap}.bubble{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border:1px solid #ccd5e5;border-radius:50%;background:#fff;color:#263653;font-weight:800;cursor:pointer}.bubble input{display:none}.bubble:has(input:checked){background:#315efb;color:white;border-color:#315efb;box-shadow:0 3px 10px #315efb33}.key-row select,.key-row input[type=text]{margin:0 0 8px;padding:10px}.key-row .short-answer{display:none}.key-row[data-type=short] .short-answer{display:block}</style>
     <button class="full">＋ Testni yaratish</button></form></section>
+    <script>
+    const countInput=document.querySelector('input[name="question_count"]');
+    const keyRows=document.getElementById('keyRows');
+    const keyHidden=document.getElementById('answerKey');
+    const keyProgress=document.getElementById('keyProgress');
+    function drawKeys(){
+      const n=Math.max(0,Math.min(200,Number(countInput.value)||0));
+      keyRows.innerHTML='';
+      for(let i=1;i<=n;i++){
+        const row=document.createElement('div');row.className='key-row';row.dataset.type='mcq';
+        row.innerHTML='<div class="key-head"><span>'+i+'-savol</span><span class="muted">Kalit</span></div><select class="key-type"><option value="mcq">A / B / C / D</option><option value="tf">To‘g‘ri / Noto‘g‘ri</option><option value="short">Qisqa yozma javob</option></select><div class="bubbles"></div><input class="short-answer" type="text" maxlength="80" placeholder="To‘g‘ri javob matni">';
+        const type=row.querySelector('.key-type');
+        function options(){
+          row.dataset.type=type.value;
+          const box=row.querySelector('.bubbles');box.innerHTML='';
+          const vals=type.value==='mcq'?['A','B','C','D']:type.value==='tf'?['TRUE','FALSE']:[];
+          vals.forEach(v=>{const lab=document.createElement('label');lab.className='bubble';lab.innerHTML='<input type="radio" name="key_'+i+'" value="'+v+'"><span>'+(v==='TRUE'?'T':v==='FALSE'?'N':v)+'</span>';box.appendChild(lab);});
+          syncKeys();
+        }
+        type.addEventListener('change',options);
+        row.addEventListener('change',syncKeys);
+        row.querySelector('.short-answer').addEventListener('input',syncKeys);
+        options();keyRows.appendChild(row);
+      }
+      syncKeys();
+    }
+    function syncKeys(){
+      const rows=[...keyRows.querySelectorAll('.key-row')];
+      const vals=rows.map(row=>row.dataset.type==='short'?row.querySelector('.short-answer').value.trim():(row.querySelector('input[type=radio]:checked')?.value||''));
+      const done=vals.filter(Boolean).length;
+      keyProgress.textContent=done+' / '+rows.length+' ta javob belgilandi';
+      keyHidden.value=vals.join(',');
+      keyHidden.setCustomValidity(done===rows.length&&vals.every(v=>!v.includes(','))?'':'Barcha savollarga javob kalitini belgilang. Javob matnida vergul ishlatmang.');
+    }
+    countInput.addEventListener('input',drawKeys);drawKeys();
+    </script>
     <section class="card"><h2>Mavjud testlar</h2>{% for t in tests %}<div class="question"><b>{{t['title']}}</b><p class="muted">Kod: {{t['code']}} · {{t['question_count']}} savol · {{t['duration']}} daqiqa · {{t['file_name'] or 'Eski test'}}</p></div>{% else %}<p class="muted">Hozircha test yo‘q.</p>{% endfor %}</section>
     <section class="card"><h2>Oxirgi natijalar</h2>{% for r in results %}<p>{{r['full_name']}} — {{r['title']}} — <b>{{r['percent']}}%</b> · {{r['cert_id']}}</p>{% else %}<p class="muted">Natijalar hali yo‘q.</p>{% endfor %}<a class="btn dark" href="/admin/logout">Chiqish</a></section>
     """,tests=tests,results=results)
