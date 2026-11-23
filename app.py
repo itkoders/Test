@@ -66,7 +66,6 @@ def home():
     <h1>Bilimingizni sinab ko‘ring.</h1><p class="muted">Test kodini kiriting, savollarga javob bering va natijangiz bo‘yicha sertifikat oling.</p>
     <form method="post" action="/start">
       <label>To‘liq ism-familiya</label><input name="full_name" required maxlength="100" placeholder="Masalan: Ali Valiyev">
-      <label>Shaxsiy ID</label><input name="student_id" required maxlength="40" placeholder="Shaxsiy ID">
       <label>Test kodi</label><input name="code" required maxlength="30" placeholder="Admin bergan kod">
       <button type="submit">Testni boshlash →</button>
     </form><p class="muted">Adminmisiz? <a href="/admin" class="gold">Admin panel</a></p></section>
@@ -75,14 +74,13 @@ def home():
 @app.post("/start")
 def start_test():
     name=request.form.get("full_name","").strip()
-    sid=request.form.get("student_id","").strip()
     code=request.form.get("code","").strip().upper()
     with db() as c:
         test=c.execute("SELECT * FROM tests WHERE code=?",(code,)).fetchone()
-    if not name or not sid or not test:
+    if not name or not test:
         flash("Ma’lumotlarni tekshiring. Test kodi topilmadi.")
         return redirect(url_for("home"))
-    session["candidate"]={"name":name,"sid":sid,"test_id":test["id"]}
+    session["candidate"]={"name":name,"test_id":test["id"]}
     return redirect(url_for("take_test", test_id=test["id"]))
 
 @app.get("/test/<int:test_id>")
@@ -113,7 +111,7 @@ def submit_test(test_id):
     cert="MG-"+secrets.token_hex(4).upper()
     with db() as c:
         c.execute("INSERT INTO results(test_id,full_name,student_id,score,total,percent,cert_id,created_at) VALUES(?,?,?,?,?,?,?,?)",
-          (test_id,candidate["name"],candidate["sid"],score,total,percent,cert,datetime.utcnow().isoformat()))
+          (test_id,candidate["name"],"",score,total,percent,cert,datetime.utcnow().isoformat()))
     session.pop("candidate",None)
     return redirect(url_for("certificate", cert_id=cert))
 
@@ -140,7 +138,7 @@ def admin_login():
     if request.method=="POST":
         if ADMIN_PASSWORD and request.form.get("username")==ADMIN_USER and secrets.compare_digest(request.form.get("password",""),ADMIN_PASSWORD):
             session["admin"]=True; return redirect(url_for("dashboard"))
-        flash("Kirish ma’lumotlari noto‘g‘ri yoki ADMIN_PASSWORD Render’da sozlanmagan.")
+        flash("Login yoki parol noto‘g‘ri. Render ENV’da ADMIN_USERNAME=admin va ADMIN_PASSWORD qiymatlarini tekshiring.")
     return page("Admin kirish", """
     <section class="card"><h1>Admin panelga kirish</h1><form method="post">
     <label>Login</label><input name="username" required value="admin">
