@@ -123,7 +123,7 @@ BASE = """
 [hidden]{display:none!important}
 *{box-sizing:border-box}
 html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font:15px/1.5 Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;-webkit-font-smoothing:antialiased}
-body{min-height:100vh;padding-bottom:calc(112px + env(safe-area-inset-bottom));background:radial-gradient(900px 520px at 8% -12%,rgba(99,102,241,.25),transparent 60%),radial-gradient(760px 460px at 100% 0%,rgba(34,211,238,.14),transparent 55%),var(--bg);background-attachment:fixed}
+body{min-height:100vh;padding-bottom:calc(176px + env(safe-area-inset-bottom));background:radial-gradient(900px 520px at 8% -12%,rgba(99,102,241,.25),transparent 60%),radial-gradient(760px 460px at 100% 0%,rgba(34,211,238,.14),transparent 55%),var(--bg);background-attachment:fixed}
 :root[data-theme="light"] body{background:radial-gradient(900px 520px at 8% -12%,rgba(99,102,241,.14),transparent 60%),radial-gradient(760px 460px at 100% 0%,rgba(34,211,238,.12),transparent 55%),var(--bg)}
 button,input,select,textarea{font:inherit}
 a{color:var(--brand);text-decoration:none}
