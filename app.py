@@ -96,8 +96,8 @@ def take_test(test_id):
     <section class="card"><p class="gold"><b>{{test['title']}}</b></p><h1>Test topshirish</h1>
     <p class="muted">{{candidate['name']}} · {{test['duration']}} daqiqa</p>
     <form method="post" action="/submit/{{test['id']}}">
-    {% for q in questions %}<div class="question"><b>{{loop.index}}. {{q[0]}}</b>
-    {% for opt in q[1:5] %}<label class="option"><input style="width:auto;margin:0 8px 0 0" type="radio" name="q{{loop.index0}}" value="{{'ABCD'[loop.index0]}}" required>{{'ABCD'[loop.index0]}}) {{opt}}</label>{% endfor %}
+    {% for q in questions %}{% set q_idx=loop.index0 %}<div class="question"><b>{{loop.index}}. {{q[0]}}</b>
+    {% for opt in q[1:5] %}<label class="option"><input style="width:auto;margin:0 8px 0 0" type="radio" name="q{{q_idx}}" value="{{'ABCD'[loop.index0]}}" required>{{'ABCD'[loop.index0]}}) {{opt}}</label>{% endfor %}
     </div>{% endfor %}<button type="submit">Javoblarni yuborish</button></form></section>
     """, test=test, candidate=candidate, questions=questions)
 
