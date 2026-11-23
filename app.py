@@ -80,6 +80,7 @@ def init_db():
                     subject TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'pending', stage TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL, username TEXT UNIQUE, password_hash TEXT)""")
+                cur.execute("""CREATE TABLE IF NOT EXISTS blocked_students(test_id BIGINT NOT NULL,full_name TEXT NOT NULL,full_name_key TEXT NOT NULL,reason TEXT NOT NULL DEFAULT 'Ogohlantirish',created_at TEXT NOT NULL,PRIMARY KEY(test_id,full_name_key))""")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_neuron_test_results_test ON results(test_id)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_neuron_test_teachers_status ON teacher_accounts(status)")
         return
@@ -99,6 +100,7 @@ def init_db():
         result_cols = {r["name"] for r in c.execute("PRAGMA table_info(results)").fetchall()}
         for name, typ in [("manual_answers","TEXT NOT NULL DEFAULT '[]'"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0")]:
             if name not in result_cols: c.execute(f"ALTER TABLE results ADD COLUMN {name} {typ}")
+        c.execute("""CREATE TABLE IF NOT EXISTS blocked_students(test_id INTEGER NOT NULL,full_name TEXT NOT NULL,full_name_key TEXT NOT NULL,reason TEXT NOT NULL DEFAULT 'Ogohlantirish',created_at TEXT NOT NULL,PRIMARY KEY(test_id,full_name_key))""")
         c.execute("""CREATE TABLE IF NOT EXISTS teacher_accounts(telegram_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, full_name TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', stage TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, username TEXT, password_hash TEXT)""")
         tc={r["name"] for r in c.execute("PRAGMA table_info(teacher_accounts)").fetchall()}
         for n,t in [("username","TEXT"),("password_hash","TEXT")]:
@@ -106,37 +108,54 @@ def init_db():
 
 BASE = """
 <!doctype html><html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#101b36"><title>{{ title }} — NEURON</title>
+<meta name="theme-color" content="#080f1e"><title>{{ title }} — NEURON</title>
 <style>
-:root{--navy:#101b36;--blue:#315efb;--ink:#18233b;--muted:#718096;--line:#e7ebf2;--bg:#f3f6fc;--green:#0d9b72}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px Inter,system-ui,Arial,sans-serif}
-header{background:linear-gradient(120deg,#101b36,#243d75);color:white;padding:17px max(18px,calc((100% - 1080px)/2));display:flex;align-items:center;justify-content:space-between}
-.brand{font-size:19px;font-weight:850;letter-spacing:1.5px}.brand span{color:#9db5ff}
-main{max-width:1080px;margin:28px auto;padding:0 16px 36px}.card{background:white;border:1px solid var(--line);border-radius:20px;padding:24px;box-shadow:0 12px 35px #1c31500b;margin-bottom:18px}
-h1{font-size:clamp(24px,5vw,34px);line-height:1.15;margin:0 0 12px}h2{font-size:21px;margin:0 0 15px}.muted{color:var(--muted);line-height:1.6}.eyebrow{color:var(--blue);font-size:12px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase}
-input,select,textarea{width:100%;padding:14px;border:1px solid #d8deea;border-radius:12px;margin:7px 0 16px;font:inherit;background:#fff;color:var(--ink)}
-input:focus,textarea:focus,select:focus{outline:3px solid #315efb22;border-color:var(--blue)}
-label{font-weight:650;font-size:14px}.btn,button{display:inline-flex;align-items:center;justify-content:center;gap:8px;background:var(--blue);color:white;border:0;border-radius:12px;padding:14px 19px;font-weight:750;font-size:14px;text-decoration:none;cursor:pointer;min-height:48px}
-.btn.secondary,button.secondary{background:#eef2ff;color:#2448c7}.btn.dark{background:var(--navy)}.btn.full{width:100%}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px}.notice{background:#fff5dc;color:#805b12;padding:13px 15px;border-radius:12px;margin-bottom:14px}
-.stat{padding:17px;background:#f6f8ff;border-radius:14px}.stat b{display:block;font-size:25px}.filebox{border:1px dashed #9eafd2;background:#f7f9ff;border-radius:16px;padding:20px;text-align:center}
-.question{border:1px solid var(--line);border-radius:15px;padding:16px;margin:12px 0}.answer-row{display:grid;grid-template-columns:48px 1fr;align-items:center;gap:12px;margin:10px 0}.qnum{background:#eef2ff;color:#315efb;border-radius:12px;padding:11px;text-align:center;font-weight:800}
-iframe{width:100%;height:68vh;border:1px solid var(--line);border-radius:14px;background:white}.docx-view{max-height:68vh;overflow:auto;border:1px solid var(--line);border-radius:14px;padding:18px;background:white;line-height:1.7}
-.bubbles{display:flex;gap:9px;flex-wrap:wrap;margin:10px 0}.bubble{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border:1px solid #ccd5e5;border-radius:50%;background:#fff;color:#263653;font-weight:800;cursor:pointer}.bubble input{display:none}.bubble:has(input:checked){background:#315efb;color:#fff;border-color:#315efb}.timer{position:sticky;top:8px;z-index:3;background:#101b36;color:white;border-radius:13px;padding:12px 16px;text-align:center;font-weight:800}
-footer{text-align:center;color:#8994a8;padding:22px;font-size:12px}
-@media(max-width:600px){main{margin:16px auto}.card{padding:18px;border-radius:16px}header{padding:15px 18px}.answer-row{grid-template-columns:40px 1fr}.btn,button{width:100%}}
-
-/* NEURON V2 responsive controls */
-.btn,button{max-width:100%;white-space:normal;line-height:1.25;touch-action:manipulation}
-@media(max-width:600px){.btn,button{width:auto}.btn.full,button.full,.grid>.btn{width:100%}.grid{grid-template-columns:minmax(0,1fr)}.bubbles{gap:7px}.bubble,button.bubble{width:42px!important;min-width:42px!important;height:42px;min-height:42px!important;padding:0!important;flex:0 0 42px}.card{overflow:hidden}.key-grid{grid-template-columns:1fr}}
-button:disabled{opacity:.4;cursor:not-allowed}.panel-hero{background:linear-gradient(135deg,#101b36,#315efb);color:#fff;border-radius:20px;padding:22px;margin-bottom:18px}.panel-hero .muted{color:#dbe5ff}.panel-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:16px 0}.panel-nav a{min-height:52px}.teacher-screen{display:none}.teacher-screen.active{display:block}.panel-nav button{min-height:52px}.panel-nav button.primary{background:#315efb;color:#fff}.cert-preview{border:2px solid #315efb;border-radius:18px;padding:20px;text-align:center;background:#fff;aspect-ratio:16/9;display:flex;flex-direction:column;justify-content:center;gap:7px;max-width:760px;margin:12px auto;outline:1px solid #c7d5ff;outline-offset:-10px}.cert-preview .cert-name{font-size:clamp(18px,4vw,28px);font-weight:850;color:#18336b;margin:8px 0}.cert-preview h2{margin:5px 0}@media(max-width:600px){.panel-nav{grid-template-columns:repeat(2,minmax(0,1fr))}.cert-preview{padding:12px;gap:3px}.cert-preview .cert-name{margin:3px 0}}.cert-preview .cert-name{font-size:23px;font-weight:850;color:#18336b;margin:12px 0}.status-pill{display:inline-flex;border-radius:999px;padding:6px 10px;background:#fff2d6;color:#805b12;font-size:12px;font-weight:800}.status-pill.good{background:#e3f8ef;color:#08734f}.warning-card{border-left:4px solid #e29b24;background:#fffaf0}.key-help{background:#f3f6ff;border-radius:12px;padding:12px;margin:10px 0}
-</style></head><body><header><div class="brand">NEURON<span>.</span></div><div>ONLAYN TEST PLATFORMASI</div></header><main>
-{% with messages=get_flashed_messages() %}{% for m in messages %}<div class="notice">{{m}}</div>{% endfor %}{% endwith %}
-{{ content|safe }}</main><footer>NEURON · Bilimni sinash va natijalarni baholash platformasi</footer></body></html>
+:root{color-scheme:dark;--bg:#080f1e;--surface:rgba(16,28,49,.92);--surface2:#172640;--text:#edf5ff;--muted:#91a5c3;--line:#263b59;--brand:#60a5fa;--cyan:#22d3ee;--soft:#172f50;--ok:#34d399;--warn:#fbbf24;--bad:#f87171;--shadow:0 18px 48px -22px rgba(0,0,0,.72);--grad:linear-gradient(125deg,#2563eb,#0891b2 72%,#22d3ee)}
+:root[data-theme="light"]{color-scheme:light;--bg:#eaf3fa;--surface:rgba(255,255,255,.92);--surface2:#edf4fb;--text:#102235;--muted:#5e768c;--line:#d5e4ee;--brand:#0891b2;--cyan:#2563eb;--soft:#e0f2fe;--shadow:0 18px 42px -24px rgba(30,75,105,.35)}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font:15px/1.48 Inter,system-ui,-apple-system,"Segoe UI",Arial,sans-serif;-webkit-font-smoothing:antialiased}
+body{min-height:100vh;padding-bottom:calc(98px + env(safe-area-inset-bottom));background-image:radial-gradient(ellipse at 8% -8%,rgba(14,165,233,.14),transparent 34%),radial-gradient(ellipse at 95% 16%,rgba(99,102,241,.10),transparent 32%),radial-gradient(ellipse at 55% 110%,rgba(6,182,212,.08),transparent 40%)}
+button,input,select,textarea{font:inherit}a{color:var(--brand)}header{position:sticky;top:0;z-index:30;background:rgba(8,15,30,.82);backdrop-filter:blur(18px);border-bottom:1px solid var(--line);padding:12px 16px;display:flex;align-items:center;gap:12px}
+:root[data-theme="light"] header{background:rgba(244,250,255,.86)}.brand{font-size:19px;font-weight:900;letter-spacing:1.5px;flex:1}.brand span{color:var(--cyan)}.brand small{display:block;font-size:10px;letter-spacing:2px;color:var(--muted);font-weight:700}
+.back-button,.theme-button{display:grid;place-items:center;width:42px;height:42px;min-width:42px;border:1px solid var(--line);border-radius:14px;background:var(--surface2);color:var(--text);text-decoration:none;font-size:20px;cursor:pointer}
+main{width:min(100%,980px);margin:16px auto 0;padding:0 14px 28px}.card,.panel-hero{background:var(--surface);border:1px solid var(--line);border-radius:22px;padding:20px;box-shadow:var(--shadow);backdrop-filter:blur(16px);margin-bottom:14px}
+.panel-hero{background:linear-gradient(125deg,rgba(8,40,73,.97),rgba(17,45,83,.96),rgba(20,39,82,.96));border-color:rgba(53,216,242,.25);position:relative;overflow:hidden}.panel-hero:after{content:"";position:absolute;width:190px;height:190px;right:-75px;top:-95px;border:1px solid rgba(125,220,255,.25);border-radius:50%;box-shadow:0 0 0 25px rgba(125,220,255,.035),0 0 0 50px rgba(125,220,255,.025);pointer-events:none}
+h1{font-size:clamp(23px,5vw,32px);line-height:1.16;letter-spacing:-.035em;margin:0 0 10px}h2{font-size:19px;letter-spacing:-.02em;margin:0 0 13px}h3{font-size:16px}.muted,.hint{color:var(--muted);line-height:1.6}.eyebrow{color:var(--cyan);font-size:11px;font-weight:850;letter-spacing:1.7px;text-transform:uppercase}
+input,select,textarea{width:100%;padding:14px 15px;border:1px solid var(--line);border-radius:14px;margin:7px 0 15px;background:var(--surface2);color:var(--text);min-height:48px}input:focus,textarea:focus,select:focus{outline:3px solid rgba(34,211,238,.15);border-color:var(--cyan)}label{font-weight:700;font-size:13px}
+.btn,button{display:inline-flex;align-items:center;justify-content:center;gap:8px;background:var(--grad);color:white;border:0;border-radius:14px;padding:13px 17px;font-weight:780;font-size:14px;text-decoration:none;cursor:pointer;min-height:48px;max-width:100%;touch-action:manipulation;line-height:1.25}
+.btn.secondary,button.secondary{background:var(--surface2);border:1px solid var(--line);color:var(--text)}.btn.dark{background:#101b36}.btn.full,button.full{width:100%}button:disabled{opacity:.4;cursor:not-allowed}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.stat{padding:16px;background:var(--surface2);border:1px solid var(--line);border-radius:17px;color:var(--muted)}.stat b{display:block;font-size:25px;color:var(--text)}
+.notice{background:rgba(245,158,11,.13);border:1px solid rgba(245,158,11,.25);color:var(--warn);padding:13px 15px;border-radius:14px;margin-bottom:14px}.filebox{border:1px dashed var(--line);background:var(--surface2);border-radius:17px;padding:18px;text-align:center}
+.question{border:1px solid var(--line);border-radius:17px;padding:15px;margin:11px 0;background:var(--surface2)}.answer-row{display:grid;grid-template-columns:44px 1fr;align-items:center;gap:12px;margin:10px 0}.qnum{background:var(--soft);color:var(--cyan);border-radius:13px;padding:11px;text-align:center;font-weight:850}
+.bubbles{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.bubble{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border:1px solid var(--line);border-radius:50%;background:var(--surface);color:var(--text);font-weight:850;cursor:pointer}.bubble input{display:none}.bubble:has(input:checked){background:var(--grad);color:#fff;border-color:transparent}
+.timer{position:sticky;top:74px;z-index:3;background:#101b36;color:white;border:1px solid rgba(34,211,238,.25);border-radius:15px;padding:13px 16px;text-align:center;font-weight:850;box-shadow:var(--shadow)}
+.panel-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:16px 0}.panel-nav button{min-height:48px}.panel-nav button.primary{background:var(--grad);color:#fff}.teacher-screen,.admin-screen{display:none}.teacher-screen.active,.admin-screen.active{display:block}
+.status-pill{display:inline-flex;border-radius:999px;padding:6px 10px;background:rgba(245,158,11,.14);color:var(--warn);font-size:12px;font-weight:850;border:1px solid rgba(245,158,11,.2)}.status-pill.good{background:rgba(16,185,129,.14);color:var(--ok)}.warning-card{border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.06)}.cert-preview{border:2px solid #3b82f6;border-radius:18px;padding:18px;text-align:center;background:#fff;color:#18336b;aspect-ratio:16/9;display:flex;flex-direction:column;justify-content:center;gap:5px;max-width:760px;margin:12px auto;outline:1px solid #c7d5ff;outline-offset:-10px}.cert-preview .cert-name{font-size:clamp(18px,4vw,28px);font-weight:850;margin:8px 0}.cert-preview h2{margin:5px 0}
+.app-dock{position:fixed;z-index:50;left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));display:flex;gap:5px;justify-content:space-around;padding:8px 6px;border:1px solid var(--line);border-radius:22px;background:rgba(12,24,43,.91);backdrop-filter:blur(22px);box-shadow:0 16px 45px rgba(0,0,0,.35);overflow-x:auto;scrollbar-width:none}.app-dock::-webkit-scrollbar{display:none}.app-dock a,.app-dock button{flex:1 0 64px;min-width:58px;min-height:58px;padding:6px 5px;display:flex;flex-direction:column;gap:3px;border:0;border-radius:15px;background:transparent;color:#91a8c5;font-size:10px;font-weight:750;text-decoration:none;white-space:nowrap}.app-dock .active,.app-dock button.active{background:rgba(34,211,238,.13);color:#67e8f9}.app-dock .ico{font-size:19px;line-height:1.2}
+:root[data-theme="light"] .app-dock{background:rgba(255,255,255,.94);box-shadow:0 12px 36px rgba(31,65,100,.18)}:root[data-theme="light"] .app-dock a,:root[data-theme="light"] .app-dock button{color:#60758d}:root[data-theme="light"] .app-dock .active{color:#087b99;background:#e0f2fe}
+footer{display:none}.key-help{background:var(--surface2);border:1px solid var(--line);border-radius:14px;padding:12px;margin:10px 0}
+@media(min-width:800px){main{margin-top:26px}.app-dock{left:50%;right:auto;transform:translateX(-50%);width:min(760px,calc(100% - 40px))}.card{padding:24px}}
+@media(max-width:600px){main{padding:0 12px 24px;margin-top:12px}.card,.panel-hero{padding:17px;border-radius:19px}.grid{grid-template-columns:minmax(0,1fr)}.btn,button{width:auto}.btn.full,button.full{width:100%}.bubble,button.bubble{width:42px!important;min-width:42px!important;height:42px;min-height:42px!important;padding:0!important;flex:0 0 42px}.cert-preview{padding:10px;gap:2px}.cert-preview .cert-name{margin:3px 0}}
+</style></head><body>
+<header><a class="back-button" href="{{back_url}}" aria-label="Orqaga">‹</a><div class="brand">NEURON<span>.</span><small>SMART TEST PLATFORM</small></div><button class="theme-button" id="themeToggle" type="button" aria-label="Mavzuni almashtirish">◐</button></header>
+<main>{% with messages=get_flashed_messages() %}{% for m in messages %}<div class="notice">{{m}}</div>{% endfor %}{% endwith %}{{ content|safe }}</main>
+{% if session.get('teacher_id') %}<nav class="app-dock" aria-label="O‘qituvchi menyusi">
+{% if request.path=='/teacher/cabinet' %}<button data-panel-target="create"><span class="ico">＋</span>Yaratish</button><button data-panel-target="tests"><span class="ico">📚</span>Testlar</button><button data-panel-target="results"><span class="ico">📊</span>Natija</button><button data-panel-target="warnings"><span class="ico">⚠️</span>Ogohlantirish</button><button data-panel-target="certificates"><span class="ico">🏅</span>Sertifikat</button>
+{% else %}<a href="/teacher/cabinet"><span class="ico">⌂</span>Kabinet</a><a href="/teacher/logout"><span class="ico">↪</span>Chiqish</a>{% endif %}
+</nav>{% elif session.get('admin') %}<nav class="app-dock" aria-label="Admin menyusi">
+{% if request.path=='/admin/dashboard' %}<button data-admin-target="overview"><span class="ico">⌂</span>Umumiy</button><button data-admin-target="adminTests"><span class="ico">📚</span>Testlar</button><button data-admin-target="adminResults"><span class="ico">📊</span>Natijalar</button><button data-admin-target="adminWarnings"><span class="ico">⚠️</span>Ogohlantirish</button><a href="/admin/teachers"><span class="ico">👩‍🏫</span>Ustozlar</a>
+{% else %}<a href="/admin/dashboard"><span class="ico">⌂</span>Boshqaruv</a><a href="/admin/logout"><span class="ico">↪</span>Chiqish</a>{% endif %}
+</nav>{% endif %}
+<script>
+(function(){const root=document.documentElement,stored=localStorage.getItem('neuron-test-theme');root.dataset.theme=stored||'dark';const btn=document.getElementById('themeToggle');btn.addEventListener('click',()=>{root.dataset.theme=root.dataset.theme==='dark'?'light':'dark';localStorage.setItem('neuron-test-theme',root.dataset.theme);});
+document.querySelectorAll('[data-panel-target]').forEach(btn=>btn.addEventListener('click',()=>{const id=btn.dataset.panelTarget;document.querySelectorAll('.teacher-screen').forEach(x=>x.classList.toggle('active',x.id===id));document.querySelectorAll('[data-panel-target]').forEach(x=>x.classList.toggle('active',x===btn));window.scrollTo({top:0,behavior:'smooth'});}));
+document.querySelectorAll('[data-admin-target]').forEach(btn=>btn.addEventListener('click',()=>{const id=btn.dataset.adminTarget;document.querySelectorAll('.admin-screen').forEach(x=>x.classList.toggle('active',x.id===id));document.querySelectorAll('[data-admin-target]').forEach(x=>x.classList.toggle('active',x===btn));window.scrollTo({top:0,behavior:'smooth'});}));
+})();
+</script></body></html>
 """
 
 def page(title, body, **ctx):
-    return render_template_string(BASE, title=title, content=render_template_string(body, **ctx))
+    back_url="/teacher/cabinet" if session.get("teacher_id") else "/admin/dashboard" if session.get("admin") else "/"
+    return render_template_string(BASE, title=title, content=render_template_string(body, **ctx), back_url=back_url)
 
 def admin_required(fn):
     @wraps(fn)
@@ -165,6 +184,11 @@ def start_test():
     with db() as c: test=c.execute("SELECT * FROM tests WHERE code=?", (code,)).fetchone()
     if not name or not test:
         flash("Ism yoki test kodi noto‘g‘ri.")
+        return redirect(url_for("home"))
+    with db() as c:
+        blocked=c.execute("SELECT 1 FROM blocked_students WHERE test_id=? AND full_name_key=?",(test["id"],name.strip().lower())).fetchone()
+    if blocked:
+        flash("Bu test uchun kirishingiz o‘qituvchi tomonidan vaqtincha bloklangan. O‘qituvchingizga murojaat qiling.")
         return redirect(url_for("home"))
     session["candidate"]={"name":name,"test_id":test["id"]}
     session["started_at"]=datetime.utcnow().timestamp()
