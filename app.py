@@ -184,7 +184,7 @@ def certificate(cert_id):
     return page("Natija va sertifikat", """
     <section class="card" style="text-align:center"><p class="eyebrow">NEURON NATIJA</p><h1>{{r['full_name']}}</h1><p class="muted">{{r['title']}}</p>
     <div class="stat"><b>{{r['score']}} / {{r['total']}}</b>{{r['percent']}}% avtomatik baholangan natija</div><h2>{{level}}</h2>
-    {% if r['review_status']=='pending' %}<p class="muted">Yopiq savollaringiz o‘qituvchi tomonidan tekshirilgach yakuniy natija va sertifikat tayyor bo‘ladi.</p>{% else %}<p class="muted">Sertifikat ID: {{r['cert_id']}}</p><a class="btn full" href="{{url_for('certificate_pdf',cert_id=r['cert_id'])}}">⬇ Sertifikatni PDF yuklab olish</a><p class="muted">Sertifikatni tekshirish: {{request.host_url}}certificate/{{r['cert_id']}}</p>{% endif %}</section>
+    {% if r['review_status']=='pending' or r['focus_warning']|int >= 2 %}<p class="muted">O‘qituvchi tekshiruvi tugagach sertifikat yuklab olish ochiladi.</p>{% else %}<p class="muted">Sertifikat ID: {{r['cert_id']}}</p><a class="btn full" href="{{url_for('certificate_pdf',cert_id=r['cert_id'])}}">⬇ Sertifikatni PDF yuklab olish</a><p class="muted">Sertifikatni tekshirish: {{request.host_url}}certificate/{{r['cert_id']}}</p>{% endif %}</section>
     """,r=r,level=level)
 
 @app.get("/certificate/<cert_id>/pdf")
