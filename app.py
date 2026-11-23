@@ -373,20 +373,6 @@ def dashboard():
     <section class="card admin-screen" id="adminWarnings"><h2>⚠️ Ogohlantirish va bloklash</h2><p class="muted">O‘quvchini tanlangan test uchun bloklash yoki blokdan chiqarish mumkin.</p>{% for r in results if r['focus_warning']|int>0 %}<div class="question warning-card"><b>{{r['full_name']}}</b><p class="muted">{{r['title']}} · {{r['focus_warning']}} ta ogohlantirish · {{r['created_at']}}</p>{% if r['is_blocked'] %}<span class="status-pill">🚫 Bloklangan</span><form method="post" action="/admin/block/{{r['id']}}"><button class="secondary full">Blokdan chiqarish</button></form>{% else %}<span class="status-pill">⚠️ Nazoratda</span><form method="post" action="/admin/block/{{r['id']}}"><button class="full">🚫 Shu testdan bloklash</button></form>{% endif %}</div>{% else %}<p class="muted">Ogohlantirishlar mavjud emas.</p>{% endfor %}</section>
     """,tests=tests,results=results)
 
-@app.post("/teacher/block/<int:result_id>")
-@teacher_required
-def teacher_toggle_block(result_id):
-    with db() as c:
-        r=c.execute("SELECT results.id,results.full_name,results.focus_warning,results.test_id FROM results JOIN tests ON tests.id=results.test_id WHERE results.id=? AND tests.teacher_id=?",(result_id,session["teacher_id"])).fetchone()
-        if not r or int(r["focus_warning"] or 0)<1: abort(404)
-        key=r["full_name"].strip().lower()
-        existing=c.execute("SELECT 1 FROM blocked_students WHERE test_id=? AND full_name_key=?",(r["test_id"],key)).fetchone()
-        if existing:
-            c.execute("DELETE FROM blocked_students WHERE test_id=? AND full_name_key=?",(r["test_id"],key)); message="O‘quvchi ushbu test uchun blokdan chiqarildi."
-        else:
-            c.execute("INSERT INTO blocked_students(test_id,full_name,full_name_key,reason,created_at) VALUES(?,?,?,?,?) ON CONFLICT(test_id,full_name_key) DO NOTHING",(r["test_id"],r["full_name"],key,"Test vaqtida ogohlantirish",datetime.utcnow().isoformat())); message="O‘quvchi ushbu test uchun bloklandi."
-    flash(message); return redirect(url_for("teacher_cabinet"))
-
 @app.post("/admin/block/<int:result_id>")
 @admin_required
 def admin_toggle_block(result_id):
@@ -478,6 +464,20 @@ def teacher_required(fn):
         if not t: session.pop("teacher_id",None); return redirect(url_for("teacher_login"))
         return fn(*a,**kw)
     return wrapper
+
+@app.post("/teacher/block/<int:result_id>")
+@teacher_required
+def teacher_toggle_block(result_id):
+    with db() as c:
+        r=c.execute("SELECT results.id,results.full_name,results.focus_warning,results.test_id FROM results JOIN tests ON tests.id=results.test_id WHERE results.id=? AND tests.teacher_id=?",(result_id,session["teacher_id"])).fetchone()
+        if not r or int(r["focus_warning"] or 0)<1: abort(404)
+        key=r["full_name"].strip().lower()
+        existing=c.execute("SELECT 1 FROM blocked_students WHERE test_id=? AND full_name_key=?",(r["test_id"],key)).fetchone()
+        if existing:
+            c.execute("DELETE FROM blocked_students WHERE test_id=? AND full_name_key=?",(r["test_id"],key)); message="O‘quvchi ushbu test uchun blokdan chiqarildi."
+        else:
+            c.execute("INSERT INTO blocked_students(test_id,full_name,full_name_key,reason,created_at) VALUES(?,?,?,?,?) ON CONFLICT(test_id,full_name_key) DO NOTHING",(r["test_id"],r["full_name"],key,"Test vaqtida ogohlantirish",datetime.utcnow().isoformat())); message="O‘quvchi ushbu test uchun bloklandi."
+    flash(message); return redirect(url_for("teacher_cabinet"))
 
 @app.route("/teacher/login",methods=["GET","POST"])
 def teacher_login():
