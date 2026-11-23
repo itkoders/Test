@@ -386,7 +386,9 @@ def telegram_webhook():
     if not secrets.compare_digest(request.headers.get("X-Telegram-Bot-Api-Secret-Token",""),TELEGRAM_WEBHOOK_SECRET): abort(403)
     update=request.get_json(silent=True) or {}; message=update.get("message") or {}; chat=message.get("chat") or {}; msg=(message.get("text") or "").strip(); chat_id=chat.get("id")
     if not chat_id: return {"ok":True}
-    if msg.startswith("/start"):
+    if msg=="/myid":
+        telegram_api("sendMessage",{"chat_id":chat_id,"text":"Telegram ID: "+str(chat_id)+"\nRender Environment sozlamasida TEACHER_CHAT_ID nomi bilan shu raqamni kiriting."})
+    elif msg.startswith("/start"):
         telegram_api("sendMessage",{"chat_id":chat_id,"text":"Assalomu alaykum! 👋\nNEURON onlayn test platformasiga xush kelibsiz. Testni boshlash uchun tugmani bosing.","reply_markup":{"inline_keyboard":[[{"text":"🚀 Testni boshlash","web_app":{"url":MINI_APP_URL}}]]}})
     elif msg=="/help": telegram_api("sendMessage",{"chat_id":chat_id,"text":"Test platformasini ochish uchun /start buyrug‘ini yuboring."})
     return {"ok":True}
