@@ -326,91 +326,16 @@ def dashboard():
         except Exception: item["manual_items"]=[]
         results.append(item)
     return page("Admin panel", """
-    <section class="card"><p class="eyebrow">NEURON ADMINISTRATORI</p><h1>Testlarni boshqarish</h1><div class="grid"><a class="btn secondary full" href="/admin/teachers">👩‍🏫 O‘qituvchilarni boshqarish</a><a class="btn dark full" href="/teacher/login">O‘qituvchi kabineti</a><a class="btn secondary full" href="/">Bosh sahifa</a></div>
-    <p class="muted">Test savollari fayl ko‘rinishida yuklanadi. O‘quvchi faylni ko‘rib, Mini App’da javoblarni belgilaydi.</p>
-    <form method="post" action="/admin/create" enctype="multipart/form-data">
-    <div class="grid"><div><label>Test nomi</label><input name="title" required placeholder="Masalan: Tarix — 1-bosqich"></div>
-    <div><label>Test kodi (ixtiyoriy)</label><input name="code" placeholder="Avtomatik yaratiladi"></div>
-    <div><label>Davomiyligi (daqiqada)</label><input name="duration" type="number" min="1" max="240" value="30" required></div>
-    <div><label>Savollar soni</label><input name="question_count" type="number" min="1" max="200" required placeholder="Masalan: 25"></div></div>
-    <label>Test fayli (PDF yoki DOCX, 15 MB gacha)</label><div class="filebox">📎 <b>Test hujjatini yuklang</b><input type="file" name="test_file" accept=".pdf,.docx" required></div>
-    <h2 style="margin-top:20px">Javoblar kaliti</h2><p class="muted">EvalBee uslubida har bir savol uchun to‘g‘ri javobni tanlang. Savol turini ham o‘zgartirishingiz mumkin.</p>
-    <div id="keyProgress" class="muted" style="margin:10px 0">0 / 0 ta javob belgilandi</div>
-    <div id="keyRows" class="key-grid"></div>
-    <input type="hidden" name="answer_key" id="answerKey" required>
-    <style>.key-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:10px}.key-row{border:1px solid #e5eaf3;border-radius:14px;padding:12px;background:#fbfcff}.key-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-weight:800}.bubbles{display:flex;gap:7px;flex-wrap:wrap}.bubble{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border:1px solid #ccd5e5;border-radius:50%;background:#fff;color:#263653;font-weight:800;cursor:pointer}.bubble input{display:none}.bubble:has(input:checked){background:#315efb;color:white;border-color:#315efb;box-shadow:0 3px 10px #315efb33}.key-row select,.key-row input[type=text]{margin:0 0 8px;padding:10px}.key-row .short-answer{display:none}.key-row[data-type=short] .short-answer{display:block}</style>
-    <button class="full">＋ Testni yaratish</button></form></section>
-    <script>
-    const countInput=document.querySelector('input[name="question_count"]');
-    const keyRows=document.getElementById('keyRows');
-    const keyHidden=document.getElementById('answerKey');
-    const keyProgress=document.getElementById('keyProgress');
-    function drawKeys(){
-      const n=Math.max(0,Math.min(200,Number(countInput.value)||0));
-      keyRows.innerHTML='';
-      for(let i=1;i<=n;i++){
-        const row=document.createElement('div');row.className='key-row';row.dataset.type='mcq';
-        row.innerHTML='<div class="key-head"><span>'+i+'-savol</span><span class="muted">Kalit</span></div><select class="key-type"><option value="mcq">A / B / C / D</option><option value="tf">To‘g‘ri / Noto‘g‘ri</option><option value="short">Qisqa yozma javob (avtomatik)</option><option value="manual">Yopiq savol (o‘qituvchi tekshiradi)</option></select><div class="bubbles"></div><input class="short-answer" type="text" maxlength="80" placeholder="To‘g‘ri javob matni">';
-        const type=row.querySelector('.key-type');
-        function options(){
-          row.dataset.type=type.value;
-          const box=row.querySelector('.bubbles');box.innerHTML='';
-          const vals=type.value==='mcq'?['A','B','C','D']:type.value==='tf'?['TRUE','FALSE']:[];
-          vals.forEach(v=>{const lab=document.createElement('label');lab.className='bubble';lab.innerHTML='<input type="radio" name="key_'+i+'" value="'+v+'"><span>'+(v==='TRUE'?'T':v==='FALSE'?'N':v)+'</span>';box.appendChild(lab);});
-          syncKeys();
-        }
-        type.addEventListener('change',options);
-        row.addEventListener('change',syncKeys);
-        row.querySelector('.short-answer').addEventListener('input',syncKeys);
-        options();keyRows.appendChild(row);
-      }
-      syncKeys();
-    }
-    function syncKeys(){
-      const rows=[...keyRows.querySelectorAll('.key-row')];
-      const vals=rows.map(row=>row.dataset.type==='short'?row.querySelector('.short-answer').value.trim():row.dataset.type==='manual'?'MANUAL':(row.querySelector('input[type=radio]:checked')?.value||''));
-      const done=vals.filter(Boolean).length;
-      keyProgress.textContent=done+' / '+rows.length+' ta javob belgilandi';
-      keyHidden.value=vals.join(',');
-      keyHidden.setCustomValidity(done===rows.length&&vals.every(v=>!v.includes(','))?'':'Barcha savollarga javob kalitini belgilang. Javob matnida vergul ishlatmang.');
-    }
-    countInput.addEventListener('input',drawKeys);drawKeys();
-    </script>
-    <section class="card"><h2>Mavjud testlar</h2>{% for t in tests %}<div class="question"><b>{{t['title']}}</b><p class="muted">Kod: {{t['code']}} · {{t['question_count']}} savol · {{t['duration']}} daqiqa · {{t['file_name'] or 'Eski test'}}</p></div>{% else %}<p class="muted">Hozircha test yo‘q.</p>{% endfor %}</section>
-    <section class="card"><h2>Natijalar va tekshiruvlar</h2>{% for r in results %}<div class="question"><p><b>{{r['full_name']}}</b> — {{r['title']}} — <b>{{r['percent']}}%</b></p><p class="muted">Holat: {{'Tekshiruv kutilmoqda' if r['review_status']=='pending' else 'Sertifikat tayyor' if r['review_status']=='checked' else r['review_status']}} · ID: {{r['cert_id']}}</p>{% if r['focus_warning']|int >= 2 %}<p><b>⚠️ Test bloklangan: {{r['focus_warning']}} ogohlantirish.</b></p><form method="post" action="/admin/clearflag/{{r['id']}}"><button class="secondary">Blokni bekor qilish</button></form>{% endif %}{% if r['review_status']=='pending' %}<form method="post" action="/admin/review/{{r['id']}}"><h3>Yopiq savollar — rubrika</h3>{% for item in r['manual_items'] %}<div class="filebox"><b>{{item['question']}}-savol</b><p>{{item['answer'] or 'Javob kiritilmagan'}}</p><label>Baholash (1 ballik mezon)</label><select name="manual_score_{{loop.index0}}"><option value="0">Noto‘g‘ri — 0</option><option value="0.5">Qisman — 0.5</option><option value="1">To‘g‘ri — 1</option></select></div>{% endfor %}<button>Baholashni saqlash</button></form>{% endif %}</div>{% else %}<p>Natijalar yo‘q.</p>{% endfor %}<a class="btn dark" href="/admin/logout">Chiqish</a></section>
+    <section class="panel-hero"><p class="eyebrow" style="color:#c7d7ff">ITKODERS TEST · ADMIN</p><h1>Boshqaruv markazi</h1><p class="muted">Platforma, o‘qituvchilar va nazorat natijalarini boshqaring.</p><div class="panel-nav"><a class="btn secondary" href="/admin/teachers">👩‍🏫 O‘qituvchilar</a><a class="btn secondary" href="#adminTests">📚 Testlar</a><a class="btn secondary" href="#adminResults">📊 Natijalar</a><a class="btn dark" href="/admin/logout">Chiqish</a></div></section>
+    <div class="grid"><div class="stat"><b>{{tests|length}}</b>Jami testlar</div><div class="stat"><b>{{results|length}}</b>Natijalar</div><div class="stat"><b>{{results|selectattr('review_status','equalto','pending')|list|length}}</b>Tekshiruv kutilmoqda</div></div>
+    <section class="card" id="adminTests"><h2>📚 Platformadagi testlar</h2><p class="muted">Testlarni faqat o‘qituvchilar o‘z kabinetidan yaratadi. Admin panelida test yaratish formasi mavjud emas.</p>{% for t in tests %}<div class="question"><b>{{t['title']}}</b><p class="muted">Kod: {{t['code']}} · {{t['question_count']}} savol · {{t['duration']}} daqiqa · {{t['file_name'] or 'Fayl biriktirilmagan'}}</p></div>{% else %}<p class="muted">Hozircha test yo‘q.</p>{% endfor %}</section>
+    <section class="card" id="adminResults"><h2>📊 Natijalar va nazorat</h2>{% for r in results %}<div class="question {% if r['focus_warning']|int>0 %}warning-card{% endif %}"><p><b>{{r['full_name']}}</b> — {{r['title']}} · <b>{{r['percent']}}%</b></p><p class="muted">{{r['score']}} / {{r['total']}} ball · {{r['created_at']}}</p><p class="muted">Holat: {{'O‘qituvchi tekshiruvi kutilmoqda' if r['review_status']=='pending' else 'Sertifikat tayyor' if r['review_status']=='checked' else r['review_status']}} · Sertifikat ID: {{r['cert_id']}}</p>{% if r['focus_warning']|int>0 %}<p><span class="status-pill">⚠️ {{r['full_name']}} — {{r['focus_warning']}} ta ogohlantirish</span></p>{% endif %}{% if r['focus_warning']|int>=2 %}<form method="post" action="/admin/clearflag/{{r['id']}}"><button class="secondary">Blokni bekor qilish</button></form>{% endif %}{% if r['review_status']=='pending' %}<form method="post" action="/admin/review/{{r['id']}}"><h3>Yopiq savollar — rubrika</h3>{% for item in r['manual_items'] %}<div class="filebox"><b>{{item['question']}}-savol</b><p>{{item['answer'] or 'Javob kiritilmagan'}}</p><label>Baholash</label><select name="manual_score_{{loop.index0}}"><option value="0">Noto‘g‘ri — 0</option><option value="0.5">Qisman — 0.5</option><option value="1">To‘g‘ri — 1</option></select></div>{% endfor %}<button>Baholashni saqlash</button></form>{% endif %}</div>{% else %}<p>Natijalar yo‘q.</p>{% endfor %}</section>
     """,tests=tests,results=results)
 
 @app.post("/admin/create")
 @admin_required
 def create_test():
-    title=request.form.get("title","").strip()
-    duration=max(1,min(240,int(request.form.get("duration",30))))
-    count=int(request.form.get("question_count",0))
-    raw_key=request.form.get("answer_key","").strip()
-    uploaded=request.files.get("test_file")
-    if not title or count<1 or count>200 or not uploaded or not uploaded.filename:
-        flash("Barcha maydonlarni to‘ldiring va PDF yoki DOCX fayl yuklang."); return redirect(url_for("dashboard"))
-    filename=secure_filename(uploaded.filename)
-    ext=filename.rsplit(".",1)[-1].lower() if "." in filename else ""
-    if ext not in ("pdf","docx"):
-        flash("Faqat PDF yoki DOCX fayl qabul qilinadi."); return redirect(url_for("dashboard"))
-    data=uploaded.read()
-    if not data or len(data)>15*1024*1024:
-        flash("Fayl bo‘sh yoki 15 MB dan katta."); return redirect(url_for("dashboard"))
-    answers=[x.strip() for x in raw_key.replace("\n",",").replace(";",",").split(",") if x.strip()]
-    if len(answers)!=count:
-        flash(f"Savollar soni {count}, javoblar kaliti esa {len(answers)} ta. Ikkalasini teng qiling."); return redirect(url_for("dashboard"))
-    allowed={"A","B","C","D","TRUE","FALSE","TO‘G‘RI","NOTO‘G‘RI"}
-    if any(a.upper() not in allowed and a.upper()!="MANUAL" and len(a)>80 for a in answers):
-        flash("Javob kalitidagi matn juda uzun."); return redirect(url_for("dashboard"))
-    code=request.form.get("code","").strip().upper() or "".join(secrets.choice(string.ascii_uppercase+string.digits) for _ in range(6))
-    try:
-        with db() as c:
-            c.execute("INSERT INTO tests(title,code,duration,questions,created_at,file_name,file_data,answer_key,question_count) VALUES(?,?,?,?,?,?,?,?,?)",
-            (title,code,duration,"",datetime.utcnow().isoformat(),filename,data,json.dumps(answers,ensure_ascii=False),count))
-        flash("Test muvaffaqiyatli yaratildi. Test kodi: "+code)
-    except sqlite3.IntegrityError: flash("Bu test kodi band. Boshqa kod kiriting.")
-    return redirect(url_for("dashboard"))
+    abort(404)
 
 @app.post("/admin/review/<int:result_id>")
 @admin_required
