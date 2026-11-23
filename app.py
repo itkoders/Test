@@ -816,10 +816,10 @@ def telegram_webhook():
         with db() as c: c.execute("UPDATE teacher_accounts SET subject=?,status='pending',stage='',created_at=? WHERE telegram_id=?",(msg[:100],datetime.utcnow().isoformat(),uid))
         telegram_api("sendMessage",{"chat_id":chat_id,"text":"Arizangiz yuborildi. Admin tasdiqlashini kuting."})
     elif msg.startswith("/start"):
-        welcome=("🧠 NEURON TEST — Bilimni sinash platformasi\\n\\n"
-                 "Assalomu alaykum! NEURON’ga xush kelibsiz.\\n\\n"
-                 "🎓 O‘quvchilar: test kodini kiriting, belgilangan vaqt ichida savollarga javob bering va natijangizni ko‘ring.\\n\\n"
-                 "👩‍🏫 O‘qituvchilar: testlarni boshqaring, javoblarni tekshiring, natijalarni kuzating va sertifikatlarni belgilang.\\n\\n"
+        welcome=("🧠 NEURON TEST — Bilimni sinash platformasi\n\n"
+                 "Assalomu alaykum! NEURON’ga xush kelibsiz.\n\n"
+                 "🎓 O‘quvchilar: test kodini kiriting, belgilangan vaqt ichida savollarga javob bering va natijangizni ko‘ring.\n\n"
+                 "👩‍🏫 O‘qituvchilar: testlarni boshqaring, javoblarni tekshiring, natijalarni kuzating va sertifikatlarni belgilang.\n\n"
                  "👇 Kerakli bo‘limni tanlang.")
         telegram_api("sendMessage",{"chat_id":chat_id,"text":welcome,"reply_markup":{"inline_keyboard":[[{"text":"🚀 Testni boshlash","web_app":{"url":MINI_APP_URL}}],[{"text":"👩‍🏫 O‘qituvchi kabinetiga kirish","url":MINI_APP_URL+"/teacher/login"}],[{"text":"📝 O‘qituvchi sifatida ro‘yxatdan o‘tish","callback_data":"teacher_register"}]]}})
     elif msg=="/myid": telegram_api("sendMessage",{"chat_id":chat_id,"text":"Telegram ID: "+str(chat_id)})
