@@ -219,7 +219,7 @@ button:disabled{opacity:.4;cursor:not-allowed;transform:none}
 .docx-view p{margin:0 0 10px}
 footer{display:none}
 @media(max-width:600px){main{padding:0 12px 24px;margin-top:12px}.card,.panel-hero{padding:18px;border-radius:22px}.grid.two{grid-template-columns:1fr 1fr}.topbar{top:68px}.timer{top:68px}.bubble{width:50px;height:50px}.bubble.wide{width:auto}}
-</style></head><body data-role="{{ 'teacher' if session.get('teacher_id') else 'admin' if session.get('admin') else 'student' }}">
+</style><script src="https://telegram.org/js/telegram-web-app.js"></script></head><body data-role="{{ 'teacher' if session.get('teacher_id') else 'admin' if session.get('admin') else 'student' }}">
 <header><a class="back-button" href="{{back_url}}" onclick="if(history.length>1){history.back();return false}" aria-label="Orqaga qaytish">‹</a><div class="brand">NEURON<span>.</span><small>SMART TEST PLATFORM</small></div><button class="theme-button" id="themeToggle" type="button" aria-label="Mavzuni almashtirish">◐</button></header>
 <main>{% with messages=get_flashed_messages() %}{% for m in messages %}<div class="notice">{{m}}</div>{% endfor %}{% endwith %}{{ content|safe }}</main>
 {% if session.get('teacher_id') %}<nav class="app-dock" aria-label="O‘qituvchi menyusi">
@@ -232,7 +232,9 @@ footer{display:none}
 <script>
 (function(){const root=document.documentElement,stored=localStorage.getItem('neuron-test-theme');root.dataset.theme=stored||'dark';const btn=document.getElementById('themeToggle');btn.addEventListener('click',()=>{root.dataset.theme=root.dataset.theme==='dark'?'light':'dark';localStorage.setItem('neuron-test-theme',root.dataset.theme);});
 document.querySelectorAll('[data-panel-target]').forEach(btn=>btn.addEventListener('click',()=>{const id=btn.dataset.panelTarget;document.querySelectorAll('.teacher-screen').forEach(x=>x.classList.toggle('active',x.id===id));document.querySelectorAll('[data-panel-target]').forEach(x=>x.classList.toggle('active',x===btn));window.scrollTo({top:0,behavior:'smooth'});}));const firstTeacher=document.querySelector('[data-panel-target="create"]');if(firstTeacher)firstTeacher.classList.add('active');
-document.querySelectorAll('[data-admin-target]').forEach(btn=>btn.addEventListener('click',()=>{const id=btn.dataset.adminTarget;document.querySelectorAll('.admin-screen').forEach(x=>x.classList.toggle('active',x.id===id));document.querySelectorAll('[data-admin-target]').forEach(x=>x.classList.toggle('active',x===btn));window.scrollTo({top:0,behavior:'smooth'});}));const firstAdmin=document.querySelector('[data-admin-target="overview"]');if(firstAdmin)firstAdmin.classList.add('active');
+document.querySelectorAll('[data-admin-target]').forEach(btn=>btn.addEventListener('click',()=>{const id=btn.dataset.adminTarget;document.querySelectorAll('.admin-screen').forEach(x=>x.classList.toggle('active',x.id===id));document.querySelectorAll('[data-admin-target]').forEach(x=>x.classList.toggle('active',x===btn));window.scrollTo({top:0,behavior:'smooth'});}));const hashTarget=location.hash.slice(1);const hashBtn=[...document.querySelectorAll('[data-panel-target],[data-admin-target]')].find(b=>(b.dataset.panelTarget||b.dataset.adminTarget)===hashTarget);if(hashBtn)hashBtn.click();else{const firstAdmin=document.querySelector('[data-admin-target="overview"]');if(firstAdmin)firstAdmin.classList.add('active');}
+window.copyText=function(btn,t){const done=()=>{btn.textContent='✓ Nusxalandi'};const fallback=()=>{const ta=document.createElement('textarea');ta.value=t;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();try{document.execCommand('copy');done();}catch(e){btn.textContent='Kodni qo‘lda yozing: '+t;}ta.remove();};if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(t).then(done,fallback);}else{fallback();}};
+if(window.Telegram&&Telegram.WebApp){Telegram.WebApp.ready();Telegram.WebApp.expand();}
 })();
 </script></body></html>
 """
@@ -287,6 +289,8 @@ def take_test(test_id):
     count=int(test["question_count"] or 0)
     if count<1: count=len([x for x in (test["questions"] or "").splitlines() if x.strip()])
     remaining=max(0,int(session.get("test_deadline",datetime.utcnow().timestamp())-datetime.utcnow().timestamp()))
+    try: keys=json.loads(test["answer_key"] or "[]")
+    except Exception: keys=[]
     return page("Test ishlash", """
     <div class="grid"><section class="card"><p class="eyebrow">TEST TOPSHIRISH</p><h1>{{test['title']}}</h1>
     <p class="muted">{{candidate['name']}} · {{test['subject'] or 'Fan ko‘rsatilmagan'}} · {{test['grade'] or 'Sinf ko‘rsatilmagan'}} · {{count}} ta savol</p><div class="timer">⏱ Qolgan vaqt: <span id="clock">{{remaining//60}}:{{"%02d"|format(remaining%60)}}</span></div><p id="focusNotice" class="notice" hidden></p>
@@ -294,9 +298,7 @@ def take_test(test_id):
     {% if test['file_name'] %}<div class="filebox"><b>📄 Test savollari</b><p class="muted">Savollar alohida brauzer oynasida ochiladi. Javoblarni belgilash uchun test oynasiga qayting.</p><a id="testFileLink" class="btn secondary full" href="{{file_url}}" target="_blank" rel="noopener noreferrer">📖 Savollarni yangi oynada ochish</a></div>{% else %}<div class="notice">Test savollari fayli biriktirilmagan.</div>{% endif %}
     </section><section class="card"><h2>Javoblar varaqasi</h2><p class="muted">Har bir savol uchun variantni bosing. Yopiq savollarga yozma javob kiriting.</p><form id="answerForm" method="post" action="/submit/{{test['id']}}">
     <div id="studentProgress" class="muted">1 / {{count}}-savol</div><div class="bubbles" id="studentNav">{% for i in range(1,count+1) %}<button type="button" class="bubble" data-go="{{i}}">{{i}}</button>{% endfor %}</div>
-    {% for i in range(1,count+1) %}<div class="question student-question" data-q="{{i}}" {% if i!=1 %}hidden{% endif %}><div class="answer-row"><div class="qnum">{{i}}</div><div><b>{{i}}-savol</b><p class="muted">Javobingizni tanlang yoki yozing.</p><div class="bubbles">
-    {% for v in ['A','B','C','D'] %}<label class="bubble"><input type="radio" name="q{{i}}" value="{{v}}"><span>{{v}}</span></label>{% endfor %}
-    </div><input name="q{{i}}_text" placeholder="Yozma javob (agar kerak bo‘lsa)" aria-label="{{i}}-savol yozma javobi"></div></div></div>{% endfor %}
+    {% for i in range(1,count+1) %}{% set k=(keys[i-1]|string|upper) if keys|length>=i else '' %}{% set opts=['TRUE','FALSE'] if k in ['TRUE','FALSE'] else (['A','B','C','D'] if k in ['A','B','C','D'] else []) %}<div class="question student-question" data-q="{{i}}" {% if i!=1 %}hidden{% endif %}><div class="answer-row"><div class="qnum">{{i}}</div><div><b>{{i}}-savol</b><p class="muted">{{'Variantni tanlang yoki yozing' if opts else 'Javobingizni yozing'}}</p>{% if opts %}<div class="bubbles">{% for v in opts %}<label class="bubble"><input type="radio" name="q{{i}}" value="{{v}}"><span>{{'T' if v=='TRUE' else 'N' if v=='FALSE' else v}}</span></label>{% endfor %}</div>{% endif %}<input name="q{{i}}_text" placeholder="Javobingiz" aria-label="{{i}}-savol yozma javobi"></div></div></div>{% endfor %}
     <div class="grid"><button type="button" class="secondary" id="prevQ">← Oldingi</button><button type="button" id="nextQ">Keyingi →</button></div><button class="full" type="submit">Testni yakunlash ✓</button></form></section></section></div>
     <script>
 const deadline={{(session.get('test_deadline',0)*1000)|int}};
@@ -311,7 +313,7 @@ const fileLink=document.getElementById('testFileLink');if(fileLink)fileLink.addE
 document.addEventListener('visibilitychange',()=>{if(document.hidden){if(openingTestFile)return;focusWarnings=Math.min(10,focusWarnings+1);const note=document.getElementById('focusNotice');note.hidden=false;note.textContent='⚠️ Test oynasidan chiqish qayd etildi ('+focusWarnings+'/2). Ikkinchi ogohlantirishda test avtomatik yakunlanadi.';if(focusWarnings>=2)finish();}else{openingTestFile=false;tick();}});
 form.addEventListener('submit',e=>{if(!submitted){e.preventDefault();if(!confirm('Javoblaringizni yakunlab yuborasizmi?'))return;finish();}});
 show(0);tick();setInterval(tick,500);</script>
-    """,test=test,candidate=candidate,count=count,file_url=url_for("test_file",test_id=test_id,token=file_signer.dumps({"test_id":test_id,"name":candidate["name"]})))
+    """,test=test,candidate=candidate,count=count,keys=keys,remaining=remaining,file_url=url_for("test_file",test_id=test_id,token=file_signer.dumps({"test_id":test_id,"name":candidate["name"]})))
 
 @app.get("/testfile/<int:test_id>/<token>")
 def test_file(test_id,token):
@@ -368,7 +370,7 @@ def submit_test(test_id):
         review_line="✍️ Yopiq savollar: "+str(len(manual))+" ta" if manual else "✍️ Yopiq savollar: yo‘q"
         warning_line="⚠️ Ogohlantirishlar: "+str(warnings)+" ta" if warnings else "✅ Ogohlantirishlar: yo‘q"
         status_line="🕒 O‘qituvchi tekshiruvi kutilmoqda" if manual or warnings>=2 else "🏅 Sertifikat tayyor"
-        notify_teacher("📊 NEURON — TEST NATIJASI\\n\\n👤 O‘quvchi: "+candidate["name"]+"\\n📝 Test: "+test["title"]+"\\n🎯 Natija: "+str(score)+"/"+str(total)+" ("+str(percent)+"%)\\n"+review_line+"\\n"+warning_line+"\\n"+status_line+"\\n🆔 Natija ID: "+str(result_id))
+        notify_teacher("📊 NEURON — TEST NATIJASI\n\n👤 O‘quvchi: "+candidate["name"]+"\n📝 Test: "+test["title"]+"\n🎯 Natija: "+str(score)+"/"+str(total)+" ("+str(percent)+"%)\n"+review_line+"\n"+warning_line+"\n"+status_line+"\n🆔 Natija ID: "+str(result_id))
     except Exception: app.logger.exception("Teacher notification failed")
     session.pop("candidate",None); session.pop("started_at",None); session.pop("test_deadline",None)
     return redirect(url_for("certificate", cert_id=cert))
@@ -379,7 +381,7 @@ def certificate(cert_id):
     if not r: abort(404)
     level="O‘qituvchi tekshiruvi kutilmoqda" if r["review_status"]=="pending" or int(r["focus_warning"] or 0)>=2 else "A’lo" if r["percent"]>=90 else "Yaxshi" if r["percent"]>=70 else "Qoniqarli" if r["percent"]>=50 else "Ishtirok etdi"
     return page("Natija va sertifikat", """
-    <section class="card" style="text-align:center"><p class="eyebrow">NEURON NATIJA</p><h1>{{r['full_name']}}</h1><p class="muted">{{r['title']}}</p>
+    <section class="card result-card"><p class="eyebrow">NEURON NATIJA</p><h1>{{r['full_name']}}</h1><p class="muted">{{r['title']}}</p>
     <div class="stat"><b>{{r['score']}} / {{r['total']}}</b>{{r['percent']}}% avtomatik baholangan natija</div><h2>{{level}}</h2>
     {% if r['review_status']=='pending' or r['focus_warning']|int >= 2 %}<p class="muted">O‘qituvchi tekshiruvi tugagach sertifikat yuklab olish ochiladi.</p>{% else %}<p class="muted">Sertifikat ID: {{r['cert_id']}}</p><a class="btn full" href="{{url_for('certificate_pdf',cert_id=r['cert_id'])}}">⬇ Sertifikatni PDF yuklab olish</a><p class="muted">Sertifikatni tekshirish: {{request.host_url}}certificate/{{r['cert_id']}}</p>{% endif %}</section>
     """,r=r,level=level)
@@ -469,7 +471,7 @@ def admin_toggle_block(result_id):
             c.execute("DELETE FROM blocked_students WHERE test_id=? AND full_name_key=?",(r["test_id"],key)); message="O‘quvchi ushbu test uchun blokdan chiqarildi."
         else:
             c.execute("INSERT INTO blocked_students(test_id,full_name,full_name_key,reason,created_at) VALUES(?,?,?,?,?) ON CONFLICT(test_id,full_name_key) DO NOTHING",(r["test_id"],r["full_name"],key,"Admin tomonidan bloklangan",datetime.utcnow().isoformat())); message="O‘quvchi ushbu test uchun bloklandi."
-    flash(message); return redirect(url_for("dashboard"))
+    flash(message); return redirect(url_for("dashboard")+"#adminWarnings")
 
 @app.post("/admin/create")
 @admin_required
@@ -493,7 +495,7 @@ def review_result(result_id):
         percent=round(final_score*100/float(r["total"])) if r["total"] else 0
         c.execute("UPDATE results SET score=?,percent=?,manual_score=?,review_status='checked' WHERE id=?",(final_score,percent,got,result_id))
         student=r["full_name"]; cert=r["cert_id"]
-    try: notify_teacher("✅ NEURON — Rubrika saqlandi\\nO‘quvchi: "+student+"\\nYakuniy ball: "+str(final_score)+"/"+str(r["total"])+"\\nNatija: "+str(percent)+"%\\nSertifikat: "+cert)
+    try: notify_teacher("✅ NEURON — Rubrika saqlandi\nO‘quvchi: "+student+"\nYakuniy ball: "+str(final_score)+"/"+str(r["total"])+"\nNatija: "+str(percent)+"%\nSertifikat: "+cert)
     except Exception: app.logger.exception("Teacher review notification failed")
     deliver_certificate(cert)
     flash("Yopiq savollar baholandi. Sertifikat tayyor bo‘lsa rasm ko‘rinishida o‘qituvchi chatiga yuborildi.")
@@ -561,7 +563,7 @@ def teacher_toggle_block(result_id):
             c.execute("DELETE FROM blocked_students WHERE test_id=? AND full_name_key=?",(r["test_id"],key)); message="O‘quvchi ushbu test uchun blokdan chiqarildi."
         else:
             c.execute("INSERT INTO blocked_students(test_id,full_name,full_name_key,reason,created_at) VALUES(?,?,?,?,?) ON CONFLICT(test_id,full_name_key) DO NOTHING",(r["test_id"],r["full_name"],key,"Test vaqtida ogohlantirish",datetime.utcnow().isoformat())); message="O‘quvchi ushbu test uchun bloklandi."
-    flash(message); return redirect(url_for("teacher_cabinet"))
+    flash(message); return redirect(url_for("teacher_cabinet")+"#warnings")
 
 @app.route("/teacher/login",methods=["GET","POST"])
 def teacher_login():
@@ -592,7 +594,7 @@ def teacher_cabinet():
 <form method="post" action="/teacher/create" enctype="multipart/form-data"><div class="grid"><div><label>Fan nomi</label><input name="subject" value="{{t['subject']}}" required placeholder="Masalan: Tarix"></div><div><label>Sinf / kurs</label><input name="grade" required placeholder="Masalan: 8-sinf"></div></div><label>Test nomi</label><input name="title" required placeholder="Masalan: 1-mavzu nazorati"><div class="grid"><div><label>Davomiyligi (daqiqada)</label><input name="duration" type="number" min="1" max="240" value="30" required></div><div><label>Savollar soni</label><input name="question_count" type="number" min="1" max="100" value="10" required></div></div>
 <label>Savollar fayli (PDF yoki DOCX, 15 MB gacha)</label><div class="filebox">📎 <b>Test hujjatini tanlang</b><input type="file" name="test_file" accept=".pdf,.docx" required></div>
 <h3>EvalBee uslubidagi javoblar kaliti</h3><div class="key-help muted">🔵 Variantli · 🟢 To‘g‘ri/Noto‘g‘ri · ✍️ Qisqa javob · 📝 Yopiq savol — o‘qituvchi tekshiradi.</div><div id="teacherKeyRows"></div><input type="hidden" name="answer_key" id="teacherAnswerKey" required><p id="teacherKeyProgress" class="muted">0 ta javob belgilandi</p><button class="full">🚀 Testni yaratish</button></form></section>
-<section class="card teacher-screen" id="tests"><h2>📚 Mening testlarim</h2>{% for x in tests %}<div class="question"><b>{{x['title']}}</b><p class="muted">{{x['subject']}} · {{x['grade']}} · {{x['question_count']}} savol · {{x['duration']}} daqiqa</p><p class="eyebrow">TEST KODI</p><div class="stat"><b style="font-size:20px">{{x['code']}}</b></div><button type="button" class="secondary full" onclick="navigator.clipboard.writeText('{{x['code']}}').then(()=>this.textContent='✓ Nusxalandi')">📋 Kodni nusxalash</button></div>{% else %}<p class="muted">Hali test yaratmagansiz.</p>{% endfor %}</section>
+<section class="card teacher-screen" id="tests"><h2>📚 Mening testlarim</h2>{% for x in tests %}<div class="question"><b>{{x['title']}}</b><p class="muted">{{x['subject']}} · {{x['grade']}} · {{x['question_count']}} savol · {{x['duration']}} daqiqa</p><p class="eyebrow">TEST KODI</p><div class="stat"><b style="font-size:20px">{{x['code']}}</b></div><button type="button" class="secondary full" onclick="copyText(this,'{{x['code']}}')">📋 Kodni nusxalash</button></div>{% else %}<p class="muted">Hali test yaratmagansiz.</p>{% endfor %}</section>
 <section class="card teacher-screen" id="results"><h2>📊 O‘quvchilar natijalari</h2>{% for r in rows %}<div class="question {% if r['focus_warning']|int>0 %}warning-card{% endif %}"><b>{{r['full_name']}}</b> — {{r['title']}}<p class="muted">{{r['score']}} / {{r['total']}} · {{r['percent']}}% · {{r['created_at']}}</p>{% if r['focus_warning']|int>0 %}<p><span class="status-pill">⚠️ {{r['focus_warning']}} ta ogohlantirish</span> <b>{{r['full_name']}}</b></p>{% endif %}{% if r['review_status']=='pending' %}<p><span class="status-pill">Yopiq savollar tekshirilmoqda</span></p><a class="btn secondary full" href="/teacher/review/{{r['id']}}">📝 Yopiq savollarni tekshirish</a>{% else %}<span class="status-pill good">✓ Baholash yakunlangan</span>{% endif %}<a class="btn full" href="/certificate/{{r['cert_id']}}">🏅 Natija va sertifikat</a></div>{% else %}<p class="muted">Hozircha natija yo‘q.</p>{% endfor %}</section>
 <section class="card teacher-screen" id="warnings"><h2>⚠️ Ogohlantirish olgan o‘quvchilar</h2><p class="muted">Bu bo‘limda test oynasidan chiqqan o‘quvchilarni ko‘rasiz. Bloklash shu test uchun o‘quvchi ismi bo‘yicha ishlaydi.</p>{% for r in rows if r['focus_warning']|int>0 %}<div class="question warning-card"><b>{{r['full_name']}}</b><p class="muted">{{r['title']}} · {{r['focus_warning']}} ta ogohlantirish · {{r['created_at']}}</p>{% if r['is_blocked'] %}<span class="status-pill">🚫 Bloklangan</span><form method="post" action="/teacher/block/{{r['id']}}"><button class="secondary full">Blokdan chiqarish</button></form>{% else %}<span class="status-pill">⚠️ Nazoratda</span><form method="post" action="/teacher/block/{{r['id']}}"><button class="full">🚫 Shu testdan bloklash</button></form>{% endif %}</div>{% else %}<p class="muted">Ogohlantirish olgan o‘quvchilar yo‘q.</p>{% endfor %}</section><section class="card teacher-screen" id="certificates"><h2>🏅 Sertifikat ko‘rinishi</h2><p class="muted">Sertifikat namunasi va o‘quvchilar olgan sertifikatlar shu bo‘limda ko‘rinadi.</p><div class="cert-preview"><div class="eyebrow">NEURON</div><h2 style="color:#315efb;margin:4px 0">SERTIFIKAT</h2><div>Ushbu sertifikat taqdim etiladi</div><div class="cert-name">O‘quvchi F.I.Sh.</div><div class="muted">“Test nomi” test sinovi natijasi</div><h2>20.0 / 20 &nbsp; | &nbsp; 100%</h2><p class="muted">Sertifikat ID: NR-XXXXXXXX</p><p class="muted">Sana: YYYY-MM-DD</p></div>{% for r in rows %}<div class="cert-preview"><div class="eyebrow">NEURON EDUCATION</div><h2 style="color:#315efb;margin:8px 0">SERTIFIKAT</h2><div>Ushbu sertifikat taqdim etiladi</div><div class="cert-name">{{r['full_name']}}</div><div class="muted">{{r['title']}}</div><h2>{{'%.1f'|format(r['score']|float)}} / {{r['total']}} &nbsp; | &nbsp; {{r['percent']}}%</h2><p class="muted">Sertifikat ID: {{r['cert_id']}}</p><p class="muted">Sana: {{r['created_at'][:10]}}</p>{% if r['review_status']=='pending' or r['focus_warning']|int>=2 %}<span class="status-pill">Tekshiruv / cheklov mavjud</span>{% else %}<span class="status-pill good">Sertifikat tayyor</span><a class="btn secondary full" href="/certificate/{{r['cert_id']}}/pdf">PDF sertifikatni ko‘rish</a>{% endif %}</div>{% else %}<p class="muted">Sertifikatlar natija kelgach shu yerda ko‘rinadi.</p>{% endfor %}</section>
 <a class="btn dark full" href="/teacher/logout">Chiqish</a><script>
