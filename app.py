@@ -407,9 +407,10 @@ def submit_test(test_id):
     except Exception: warnings=max(0,min(10,int(session.get("focus_warning_count",0) or 0)))
     percent=round(score*100/total) if total else 0
     cert="NR-"+secrets.token_hex(4).upper()
+    student_chat_id=telegram_user_chat_id(request.form.get("telegram_init_data",""))
     with db() as c:
-        cur=c.execute("INSERT INTO results(test_id,full_name,student_id,score,total,percent,cert_id,created_at,manual_answers,review_status,focus_warning,certificate_approved) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
-        (test_id,candidate["name"],"",score,total,percent,cert,datetime.utcnow().isoformat(),json.dumps(manual,ensure_ascii=False),"pending" if manual else "checked",warnings,bool(test["certificate_mode"]=="threshold" and not manual and warnings<2 and score>=float(test["certificate_min_score"] or 0))))
+        cur=c.execute("INSERT INTO results(test_id,full_name,student_id,score,total,percent,cert_id,created_at,manual_answers,review_status,focus_warning,certificate_approved,student_chat_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id",
+        (test_id,candidate["name"],"",score,total,percent,cert,datetime.utcnow().isoformat(),json.dumps(manual,ensure_ascii=False),"pending" if manual else "checked",warnings,bool(test["certificate_mode"]=="threshold" and not manual and warnings<2 and score>=float(test["certificate_min_score"] or 0)),student_chat_id))
         result_id=cur.fetchone()["id"]
     try:
         review_line="✍️ Yopiq savollar: "+str(len(manual))+" ta" if manual else "✍️ Yopiq savollar: yo‘q"
@@ -618,48 +619,57 @@ def teacher_account():
     with db() as c:
         t=c.execute("SELECT * FROM teacher_accounts WHERE telegram_id=?",(session["teacher_id"],)).fetchone()
     if request.method=="POST":
-        current=request.form.get("current_password","")
-        new_username=request.form.get("username","").strip()
-        new_password=request.form.get("new_password","")
-        confirm=request.form.get("confirm_password","")
-        org_name=request.form.get("certificate_org_name","").strip()[:100]
-        logo_file=request.files.get("certificate_logo")
-        remove_logo=request.form.get("remove_certificate_logo")=="on"
-        logo_data=t["certificate_logo"] if t else None
-        check=hashlib.pbkdf2_hmac("sha256",current.encode(),b"neuron-teacher-v1",180000).hex()
-        if not t or not t["password_hash"] or not secrets.compare_digest(check,t["password_hash"]):
-            flash("Amaldagi parol noto‘g‘ri.")
-        elif not re.fullmatch(r"[A-Za-z0-9_.-]{4,32}",new_username):
-            flash("Login 4–32 belgidan iborat bo‘lsin.")
-        elif new_password and len(new_password)<8:
-            flash("Yangi parol kamida 8 belgidan iborat bo‘lishi kerak.")
-        elif new_password and new_password!=confirm:
-            flash("Yangi parollar mos kelmadi.")
-        else:
+        action=request.form.get("account_action","")
+        if action=="branding":
+            org_name=request.form.get("certificate_org_name","").strip()[:100]
+            logo_file=request.files.get("certificate_logo")
+            remove_logo=request.form.get("remove_certificate_logo")=="on"
+            logo_data=t["certificate_logo"] if t else None
             try:
                 if remove_logo: logo_data=None
                 if logo_file and logo_file.filename:
                     from PIL import Image
                     raw=logo_file.read()
                     if len(raw)>2*1024*1024: raise ValueError("Logotip 2 MB dan kichik bo‘lsin.")
-                    check_img=Image.open(io.BytesIO(raw)); check_img.verify()
-                    if check_img.format not in ("PNG","JPEG","WEBP"): raise ValueError("Faqat PNG, JPG yoki WEBP qabul qilinadi.")
-                    import base64
-                    logo_data=base64.b64encode(raw).decode("ascii")
+                    check_img=Image.open(io.BytesIO(raw)); fmt=check_img.format; check_img.verify()
+                    if fmt not in ("PNG","JPEG","WEBP"): raise ValueError("Faqat PNG, JPG yoki WEBP qabul qilinadi.")
+                    logo_data=__import__("base64").b64encode(raw).decode("ascii")
                 with db() as c:
-                    duplicate=c.execute("SELECT telegram_id FROM teacher_accounts WHERE username=? AND telegram_id<>?",(new_username,session["teacher_id"])).fetchone()
-                    if duplicate:
-                        flash("Bu login band. Boshqa login tanlang.")
-                    else:
-                        new_hash=hashlib.pbkdf2_hmac("sha256",new_password.encode(),b"neuron-teacher-v1",180000).hex() if new_password else t["password_hash"]
-                        c.execute("UPDATE teacher_accounts SET username=?,password_hash=?,certificate_org_name=?,certificate_logo=? WHERE telegram_id=?",(new_username,new_hash,org_name,logo_data,session["teacher_id"]))
-                        flash("Hisob va sertifikat sozlamalari saqlandi.")
-                        return redirect(url_for("teacher_account"))
+                    c.execute("UPDATE teacher_accounts SET certificate_org_name=?,certificate_logo=? WHERE telegram_id=?",(org_name,logo_data,session["teacher_id"]))
+                flash("Sertifikat nomi va logotipi saqlandi.")
+                return redirect(url_for("teacher_account"))
             except Exception as e:
                 flash(str(e) if isinstance(e,ValueError) else "Logotip faylini o‘qib bo‘lmadi.")
+        elif action=="credentials":
+            current=request.form.get("current_password","")
+            new_username=request.form.get("username","").strip()
+            new_password=request.form.get("new_password","")
+            confirm=request.form.get("confirm_password","")
+            check=hashlib.pbkdf2_hmac("sha256",current.encode(),b"neuron-teacher-v1",180000).hex()
+            if not t or not t["password_hash"] or not secrets.compare_digest(check,t["password_hash"]):
+                flash("Amaldagi parol noto‘g‘ri.")
+            elif not re.fullmatch(r"[A-Za-z0-9_.-]{4,32}",new_username):
+                flash("Login 4–32 belgidan iborat bo‘lsin.")
+            elif new_password and len(new_password)<8:
+                flash("Yangi parol kamida 8 belgidan iborat bo‘lishi kerak.")
+            elif new_password and new_password!=confirm:
+                flash("Yangi parollar mos kelmadi.")
+            else:
+                with db() as c:
+                    duplicate=c.execute("SELECT telegram_id FROM teacher_accounts WHERE username=? AND telegram_id<>?",(new_username,session["teacher_id"])).fetchone()
+                    if duplicate: flash("Bu login band. Boshqa login tanlang.")
+                    else:
+                        new_hash=hashlib.pbkdf2_hmac("sha256",new_password.encode(),b"neuron-teacher-v1",180000).hex() if new_password else t["password_hash"]
+                        c.execute("UPDATE teacher_accounts SET username=?,password_hash=? WHERE telegram_id=?",(new_username,new_hash,session["teacher_id"]))
+                        flash("Login va parol sozlamalari saqlandi.")
+                        return redirect(url_for("teacher_account"))
+        else:
+            flash("Qaysi sozlamani o‘zgartirmoqchi ekaningizni tanlang.")
     with db() as c:
         t=c.execute("SELECT * FROM teacher_accounts WHERE telegram_id=?",(session["teacher_id"],)).fetchone()
-    return page("Kabinet sozlamalari", """<section class="card"><p class="eyebrow">NEURON TEACHER</p><h1>🔐 Hisob va sertifikat sozlamalari</h1><form method="post" enctype="multipart/form-data"><label>Yangi login</label><input name="username" value="{{t['username'] or ''}}" minlength="4" maxlength="32" pattern="[A-Za-z0-9_.-]+" required><label>Yangi parol (ixtiyoriy)</label><input name="new_password" type="password" minlength="8"><label>Yangi parolni takrorlang</label><input name="confirm_password" type="password"><hr><h2>🏅 Sertifikat ko‘rinishi</h2><p class="muted">Bu nom sertifikatda logotip ostida chiqadi. O‘zingizning ismingiz yoki o‘quv markazingiz nomini yozing.</p><label>Sertifikatda ko‘rinadigan nom</label><input name="certificate_org_name" value="{{t['certificate_org_name'] or t['full_name']}}" maxlength="100" placeholder="Masalan: NEURON o‘quv markazi"><label>Logotip (PNG, JPG yoki WEBP, 2 MB gacha)</label><input type="file" name="certificate_logo" accept="image/png,image/jpeg,image/webp"><label><input type="checkbox" name="remove_certificate_logo" style="width:auto;min-height:auto"> Saqlangan logotipni olib tashlash</label><p class="muted">Logotipni bir marta yuklaysiz, keyingi sertifikatlarda avtomatik ishlatiladi.</p><hr><label>Amaldagi parol — o‘zgarishlarni tasdiqlash uchun</label><input name="current_password" type="password" required><button class="full">💾 O‘zgarishlarni saqlash</button></form><a class="btn secondary full" href="/teacher/cabinet">← Kabinetga qaytish</a></section>""",t=t)
+    return page("Kabinet sozlamalari", """<section class="card"><p class="eyebrow">NEURON TEACHER</p><h1>⚙️ O‘qituvchi sozlamalari</h1>
+<section class="question"><h2>🏅 Sertifikat ko‘rinishi</h2><p class="muted">Bu bo‘lim faqat sertifikatdagi tashkilot nomi va logotipni boshqaradi. Login yoki parolga ta’sir qilmaydi.</p><form method="post" enctype="multipart/form-data"><input type="hidden" name="account_action" value="branding"><label>Sertifikatda ko‘rinadigan nom</label><input name="certificate_org_name" value="{{t['certificate_org_name'] or t['full_name']}}" maxlength="100" placeholder="O‘quv markazi yoki o‘qituvchi ismi"><label>Logotip (PNG, JPG yoki WEBP, 2 MB gacha)</label><input type="file" name="certificate_logo" accept="image/png,image/jpeg,image/webp"><label><input type="checkbox" name="remove_certificate_logo" style="width:auto;min-height:auto"> Saqlangan logotipni olib tashlash</label><button class="full">💾 Nom va logotipni saqlash</button></form></section>
+<section class="question"><h2>🔐 Login va parol</h2><p class="muted">Bu bo‘lim sertifikat nomi yoki logotipni o‘zgartirmaydi.</p><form method="post"><input type="hidden" name="account_action" value="credentials"><label>Yangi login</label><input name="username" value="{{t['username'] or ''}}" minlength="4" maxlength="32" pattern="[A-Za-z0-9_.-]+" required><label>Yangi parol (o‘zgartirmasangiz bo‘sh qoldiring)</label><input name="new_password" type="password" minlength="8"><label>Yangi parolni takrorlang</label><input name="confirm_password" type="password"><label>Amaldagi parol — tasdiqlash uchun</label><input name="current_password" type="password" required><button class="full">🔐 Login / parolni saqlash</button></form></section><a class="btn secondary full" href="/teacher/cabinet">← Kabinetga qaytish</a></section>""",t=t)
 
 
 @app.get("/teacher/register")
@@ -750,7 +760,7 @@ def teacher_grant_certificate(result_id):
         c.execute("UPDATE results SET certificate_approved=TRUE WHERE id=?",(result_id,))
         cert=r["cert_id"]
     sent=deliver_certificate(cert)
-    flash("Sertifikatga ruxsat saqlandi. PNG va PDF natija sahifasida tayyor.")
+    flash("Sertifikat tasdiqlandi va Telegramga yuborildi." if sent else "Sertifikat tasdiqlandi, ammo Telegramga yuborilmadi. O‘quvchi testni bot ichidan ochganini tekshiring.")
     return redirect(url_for("teacher_cabinet"))
 
 @app.route("/teacher/review/<int:result_id>",methods=["GET","POST"])
