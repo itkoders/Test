@@ -359,7 +359,7 @@ def admin_login():
 def dashboard():
     with db() as c:
         tests=c.execute("SELECT * FROM tests ORDER BY id DESC").fetchall()
-        raw_results=c.execute("SELECT results.*,tests.title FROM results JOIN tests ON tests.id=results.test_id ORDER BY results.id DESC LIMIT 100").fetchall()
+        raw_results=c.execute("SELECT results.*,tests.title,EXISTS(SELECT 1 FROM blocked_students b WHERE b.test_id=results.test_id AND b.full_name_key=lower(trim(results.full_name))) AS is_blocked FROM results JOIN tests ON tests.id=results.test_id ORDER BY results.id DESC LIMIT 100").fetchall()
     results=[]
     for item in raw_results:
         item=dict(item)
@@ -367,11 +367,39 @@ def dashboard():
         except Exception: item["manual_items"]=[]
         results.append(item)
     return page("Admin panel", """
-    <section class="panel-hero"><p class="eyebrow" style="color:#c7d7ff">ITKODERS TEST · ADMIN</p><h1>Boshqaruv markazi</h1><p class="muted">Platforma, o‘qituvchilar va nazorat natijalarini boshqaring.</p><div class="panel-nav"><a class="btn secondary" href="/admin/teachers">👩‍🏫 O‘qituvchilar</a><a class="btn secondary" href="#adminTests">📚 Testlar</a><a class="btn secondary" href="#adminResults">📊 Natijalar</a><a class="btn dark" href="/admin/logout">Chiqish</a></div></section>
-    <div class="grid"><div class="stat"><b>{{tests|length}}</b>Jami testlar</div><div class="stat"><b>{{results|length}}</b>Natijalar</div><div class="stat"><b>{{results|selectattr('review_status','equalto','pending')|list|length}}</b>Tekshiruv kutilmoqda</div></div>
-    <section class="card" id="adminTests"><h2>📚 Platformadagi testlar</h2><p class="muted">Testlarni faqat o‘qituvchilar o‘z kabinetidan yaratadi. Admin panelida test yaratish formasi mavjud emas.</p>{% for t in tests %}<div class="question"><b>{{t['title']}}</b><p class="muted">Kod: {{t['code']}} · {{t['question_count']}} savol · {{t['duration']}} daqiqa · {{t['file_name'] or 'Fayl biriktirilmagan'}}</p></div>{% else %}<p class="muted">Hozircha test yo‘q.</p>{% endfor %}</section>
-    <section class="card" id="adminResults"><h2>📊 Natijalar va nazorat</h2>{% for r in results %}<div class="question {% if r['focus_warning']|int>0 %}warning-card{% endif %}"><p><b>{{r['full_name']}}</b> — {{r['title']}} · <b>{{r['percent']}}%</b></p><p class="muted">{{r['score']}} / {{r['total']}} ball · {{r['created_at']}}</p><p class="muted">Holat: {{'O‘qituvchi tekshiruvi kutilmoqda' if r['review_status']=='pending' else 'Sertifikat tayyor' if r['review_status']=='checked' else r['review_status']}} · Sertifikat ID: {{r['cert_id']}}</p>{% if r['focus_warning']|int>0 %}<p><span class="status-pill">⚠️ {{r['full_name']}} — {{r['focus_warning']}} ta ogohlantirish</span></p>{% endif %}{% if r['focus_warning']|int>=2 %}<form method="post" action="/admin/clearflag/{{r['id']}}"><button class="secondary">Blokni bekor qilish</button></form>{% endif %}{% if r['review_status']=='pending' %}<form method="post" action="/admin/review/{{r['id']}}"><h3>Yopiq savollar — rubrika</h3>{% for item in r['manual_items'] %}<div class="filebox"><b>{{item['question']}}-savol</b><p>{{item['answer'] or 'Javob kiritilmagan'}}</p><label>Baholash</label><select name="manual_score_{{loop.index0}}"><option value="0">Noto‘g‘ri — 0</option><option value="0.5">Qisman — 0.5</option><option value="1">To‘g‘ri — 1</option></select></div>{% endfor %}<button>Baholashni saqlash</button></form>{% endif %}</div>{% else %}<p>Natijalar yo‘q.</p>{% endfor %}</section>
+    <section class="panel-hero admin-screen active" id="overview"><p class="eyebrow">NEURON V2 · SUPER ADMIN</p><h1>Boshqaruv markazi</h1><p class="muted">Test platformasi, o‘qituvchilar va xavfsizlik nazorati.</p><div class="grid"><div class="stat"><b>{{tests|length}}</b>Jami testlar</div><div class="stat"><b>{{results|length}}</b>Natijalar</div><div class="stat"><b>{{results|selectattr('review_status','equalto','pending')|list|length}}</b>Tekshiruv kutilmoqda</div><div class="stat"><b>{{results|selectattr('focus_warning')|list|length}}</b>Ogohlantirishlar</div></div></section>
+    <section class="card admin-screen" id="adminTests"><h2>📚 Platformadagi testlar</h2><p class="muted">Testlarni o‘qituvchilar o‘z kabinetidan yaratadi. Admin panelida test yaratish yo‘q.</p>{% for t in tests %}<div class="question"><b>{{t['title']}}</b><p class="muted">Kod: {{t['code']}} · {{t['question_count']}} savol · {{t['duration']}} daqiqa · {{t['file_name'] or 'Fayl biriktirilmagan'}}</p></div>{% else %}<p class="muted">Hozircha test yo‘q.</p>{% endfor %}</section>
+    <section class="card admin-screen" id="adminResults"><h2>📊 Barcha natijalar</h2>{% for r in results %}<div class="question {% if r['focus_warning']|int>0 %}warning-card{% endif %}"><p><b>{{r['full_name']}}</b> — {{r['title']}} · <b>{{r['percent']}}%</b></p><p class="muted">{{r['score']}} / {{r['total']}} ball · {{r['created_at']}}</p><p class="muted">Holat: {{'O‘qituvchi tekshiruvi kutilmoqda' if r['review_status']=='pending' else 'Sertifikat tayyor' if r['review_status']=='checked' else r['review_status']}} · ID: {{r['cert_id']}}</p>{% if r['review_status']=='pending' %}<form method="post" action="/admin/review/{{r['id']}}"><h3>Yopiq savollar — rubrika</h3>{% for item in r['manual_items'] %}<div class="filebox"><b>{{item['question']}}-savol</b><p>{{item['answer'] or 'Javob kiritilmagan'}}</p><label>Baholash</label><select name="manual_score_{{loop.index0}}"><option value="0">Noto‘g‘ri — 0</option><option value="0.5">Qisman — 0.5</option><option value="1">To‘g‘ri — 1</option></select></div>{% endfor %}<button>Baholashni saqlash</button></form>{% endif %}</div>{% else %}<p>Natijalar yo‘q.</p>{% endfor %}</section>
+    <section class="card admin-screen" id="adminWarnings"><h2>⚠️ Ogohlantirish va bloklash</h2><p class="muted">O‘quvchini tanlangan test uchun bloklash yoki blokdan chiqarish mumkin.</p>{% for r in results if r['focus_warning']|int>0 %}<div class="question warning-card"><b>{{r['full_name']}}</b><p class="muted">{{r['title']}} · {{r['focus_warning']}} ta ogohlantirish · {{r['created_at']}}</p>{% if r['is_blocked'] %}<span class="status-pill">🚫 Bloklangan</span><form method="post" action="/admin/block/{{r['id']}}"><button class="secondary full">Blokdan chiqarish</button></form>{% else %}<span class="status-pill">⚠️ Nazoratda</span><form method="post" action="/admin/block/{{r['id']}}"><button class="full">🚫 Shu testdan bloklash</button></form>{% endif %}</div>{% else %}<p class="muted">Ogohlantirishlar mavjud emas.</p>{% endfor %}</section>
     """,tests=tests,results=results)
+
+@app.post("/teacher/block/<int:result_id>")
+@teacher_required
+def teacher_toggle_block(result_id):
+    with db() as c:
+        r=c.execute("SELECT results.id,results.full_name,results.focus_warning,results.test_id FROM results JOIN tests ON tests.id=results.test_id WHERE results.id=? AND tests.teacher_id=?",(result_id,session["teacher_id"])).fetchone()
+        if not r or int(r["focus_warning"] or 0)<1: abort(404)
+        key=r["full_name"].strip().lower()
+        existing=c.execute("SELECT 1 FROM blocked_students WHERE test_id=? AND full_name_key=?",(r["test_id"],key)).fetchone()
+        if existing:
+            c.execute("DELETE FROM blocked_students WHERE test_id=? AND full_name_key=?",(r["test_id"],key)); message="O‘quvchi ushbu test uchun blokdan chiqarildi."
+        else:
+            c.execute("INSERT INTO blocked_students(test_id,full_name,full_name_key,reason,created_at) VALUES(?,?,?,?,?) ON CONFLICT(test_id,full_name_key) DO NOTHING",(r["test_id"],r["full_name"],key,"Test vaqtida ogohlantirish",datetime.utcnow().isoformat())); message="O‘quvchi ushbu test uchun bloklandi."
+    flash(message); return redirect(url_for("teacher_cabinet"))
+
+@app.post("/admin/block/<int:result_id>")
+@admin_required
+def admin_toggle_block(result_id):
+    with db() as c:
+        r=c.execute("SELECT id,full_name,focus_warning,test_id FROM results WHERE id=?",(result_id,)).fetchone()
+        if not r or int(r["focus_warning"] or 0)<1: abort(404)
+        key=r["full_name"].strip().lower()
+        existing=c.execute("SELECT 1 FROM blocked_students WHERE test_id=? AND full_name_key=?",(r["test_id"],key)).fetchone()
+        if existing:
+            c.execute("DELETE FROM blocked_students WHERE test_id=? AND full_name_key=?",(r["test_id"],key)); message="O‘quvchi ushbu test uchun blokdan chiqarildi."
+        else:
+            c.execute("INSERT INTO blocked_students(test_id,full_name,full_name_key,reason,created_at) VALUES(?,?,?,?,?) ON CONFLICT(test_id,full_name_key) DO NOTHING",(r["test_id"],r["full_name"],key,"Admin tomonidan bloklangan",datetime.utcnow().isoformat())); message="O‘quvchi ushbu test uchun bloklandi."
+    flash(message); return redirect(url_for("dashboard"))
 
 @app.post("/admin/create")
 @admin_required
