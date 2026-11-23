@@ -109,7 +109,7 @@ def take_test(test_id):
     <div class="grid"><section class="card"><p class="eyebrow">TEST TOPSHIRISH</p><h1>{{test['title']}}</h1>
     <p class="muted">{{candidate['name']}} · {{count}} ta savol</p><div class="timer">⏱ Qolgan vaqt: <span id="clock">{{test['duration']}}:00</span></div>
     <p class="muted">Savollarni hujjatdan o‘qing. Javoblarni o‘ng/ pastdagi bo‘limda belgilang.</p>
-    {% if test['file_name'] %}<a id="testFileLink" class="btn secondary full" href="/testfile/{{test['id']}}" target="_blank" rel="noopener">📄 Test faylini ko‘rish</a>{% endif %}
+    {% if test['file_name'] %}<div class="filebox"><b>📄 Test savollari</b><p class="muted">Savollar shu yerda ko‘rinadi. Hujjatni alohida oynada ochish shart emas.</p><iframe title="Test savollari" src="/testfile/{{test['id']}}" loading="eager"></iframe></div>{% else %}<div class="notice">Test savollari fayli biriktirilmagan.</div>{% endif %}
     </section><section class="card"><h2>Javoblar varaqasi</h2><p class="muted">Har bir savol uchun variantni bosing. Yopiq savollarga yozma javob kiriting.</p><form id="answerForm" method="post" action="/submit/{{test['id']}}">
     {% for i in range(1,count+1) %}<div class="question"><div class="answer-row"><div class="qnum">{{i}}</div><div><b>{{i}}-savol</b><div class="bubbles">
     {% for v in ['A','B','C','D'] %}<label class="bubble"><input type="radio" name="q{{i}}" value="{{v}}"><span>{{v}}</span></label>{% endfor %}
