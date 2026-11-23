@@ -72,6 +72,7 @@ def init_db():
                 cur.execute("ALTER TABLE tests ADD COLUMN IF NOT EXISTS grade TEXT NOT NULL DEFAULT ''")
                 cur.execute("ALTER TABLE tests ADD COLUMN IF NOT EXISTS certificate_mode TEXT NOT NULL DEFAULT 'manual'")
                 cur.execute("ALTER TABLE tests ADD COLUMN IF NOT EXISTS certificate_min_score DOUBLE PRECISION NOT NULL DEFAULT 0")
+                cur.execute("ALTER TABLE tests ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE")
                 cur.execute("""CREATE TABLE IF NOT EXISTS results(
                     id BIGSERIAL PRIMARY KEY, test_id BIGINT NOT NULL, full_name TEXT NOT NULL,
                     student_id TEXT NOT NULL DEFAULT '', score DOUBLE PRECISION NOT NULL,
@@ -102,7 +103,7 @@ def init_db():
             score INTEGER NOT NULL, total INTEGER NOT NULL, percent INTEGER NOT NULL,
             cert_id TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL)""")
         cols = {r["name"] for r in c.execute("PRAGMA table_info(tests)").fetchall()}
-        for name, typ in [("file_name","TEXT"),("file_data","BLOB"),("answer_key","TEXT"),("question_count","INTEGER NOT NULL DEFAULT 0"),("manual_answers","TEXT"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0"),("teacher_id","TEXT"),("subject","TEXT NOT NULL DEFAULT ''"),("grade","TEXT NOT NULL DEFAULT ''"),("certificate_mode","TEXT NOT NULL DEFAULT 'manual'"),("certificate_min_score","REAL NOT NULL DEFAULT 0")]:
+        for name, typ in [("file_name","TEXT"),("file_data","BLOB"),("answer_key","TEXT"),("question_count","INTEGER NOT NULL DEFAULT 0"),("manual_answers","TEXT"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0"),("teacher_id","TEXT"),("subject","TEXT NOT NULL DEFAULT ''"),("grade","TEXT NOT NULL DEFAULT ''"),("certificate_mode","TEXT NOT NULL DEFAULT 'manual'"),("certificate_min_score","REAL NOT NULL DEFAULT 0"),("is_active","INTEGER NOT NULL DEFAULT 1")]:
             if name not in cols: c.execute(f"ALTER TABLE tests ADD COLUMN {name} {typ}")
         result_cols = {r["name"] for r in c.execute("PRAGMA table_info(results)").fetchall()}
         for name, typ in [("manual_answers","TEXT NOT NULL DEFAULT '[]'"),("review_status","TEXT NOT NULL DEFAULT 'checked'"),("focus_warning","INTEGER NOT NULL DEFAULT 0"),("manual_score","INTEGER NOT NULL DEFAULT 0"),("certificate_approved","INTEGER NOT NULL DEFAULT 0")]:
@@ -274,7 +275,7 @@ def home():
 def start_test():
     name=request.form.get("full_name","").strip()
     code=request.form.get("code","").strip().upper()
-    with db() as c: test=c.execute("SELECT * FROM tests WHERE code=?", (code,)).fetchone()
+    with db() as c: test=c.execute("SELECT * FROM tests WHERE code=? AND is_active=TRUE", (code,)).fetchone()
     if not name or not test:
         flash("Ism yoki test kodi noto‘g‘ri.")
         return redirect(url_for("home"))
@@ -288,11 +289,26 @@ def start_test():
     session["test_deadline"]=session["started_at"]+int(test["duration"] or 30)*60
     return redirect(url_for("take_test", test_id=test["id"]))
 
+@app.get("/test/<int:test_id>/status")
+def test_status(test_id):
+    candidate=session.get("candidate")
+    if not candidate or int(candidate.get("test_id",-1))!=test_id:
+        return {"active":False,"remaining":0,"reason":"session"},403
+    test=get_test(test_id)
+    if not test or not test["is_active"]:
+        return {"active":False,"remaining":0,"reason":"closed"}
+    deadline=float(session.get("test_deadline",0) or 0)
+    remaining=max(0,int(deadline-datetime.utcnow().timestamp()))
+    return {"active":remaining>0,"remaining":remaining,"reason":"time" if remaining<=0 else "ok"}
+
 @app.get("/test/<int:test_id>")
 def take_test(test_id):
     candidate=session.get("candidate")
     test=get_test(test_id)
-    if not candidate or candidate["test_id"]!=test_id or not test: return redirect(url_for("home"))
+    if not candidate or candidate["test_id"]!=test_id or not test or not test["is_active"]:
+        session.pop("candidate",None); session.pop("started_at",None); session.pop("test_deadline",None)
+        flash("Bu test o‘qituvchi tomonidan yopilgan yoki o‘chirilgan.")
+        return redirect(url_for("home"))
     count=int(test["question_count"] or 0)
     if count<1: count=len([x for x in (test["questions"] or "").splitlines() if x.strip()])
     remaining=max(0,int(session.get("test_deadline",datetime.utcnow().timestamp())-datetime.utcnow().timestamp()))
@@ -319,7 +335,9 @@ document.getElementById('prevQ').onclick=()=>show(current-1);document.getElement
 const fileLink=document.getElementById('testFileLink');if(fileLink)fileLink.addEventListener('click',()=>{openingTestFile=true;});
 document.addEventListener('visibilitychange',()=>{if(document.hidden){if(openingTestFile)return;focusWarnings=Math.min(10,focusWarnings+1);const note=document.getElementById('focusNotice');note.hidden=false;note.textContent='⚠️ Test oynasidan chiqish qayd etildi ('+focusWarnings+'/2). Ikkinchi ogohlantirishda test avtomatik yakunlanadi.';if(focusWarnings>=2)finish();}else{openingTestFile=false;tick();}});
 form.addEventListener('submit',e=>{if(!submitted){e.preventDefault();if(!confirm('Javoblaringizni yakunlab yuborasizmi?'))return;finish();}});
-show(0);tick();setInterval(tick,500);</script>
+show(0);tick();setInterval(tick,500);
+async function syncServer(){try{const r=await fetch('/test/{{test["id"]}}/status',{cache:'no-store'});const data=await r.json();if(!r.ok||!data.active){const note=document.getElementById('focusNotice');note.hidden=false;note.textContent=data.reason==='closed'?'⛔ O‘qituvchi testni yopdi. Javoblar yakunlanmoqda.':'⏰ Belgilangan vaqt tugadi. Test yakunlanmoqda.';finish();}}catch(e){}}
+syncServer();setInterval(syncServer,2000);</script>
     """,test=test,candidate=candidate,count=count,keys=keys,remaining=remaining,file_url=url_for("test_file",test_id=test_id,token=file_signer.dumps({"test_id":test_id,"name":candidate["name"]})))
 
 @app.get("/testfile/<int:test_id>/<token>")
@@ -353,6 +371,8 @@ def submit_test(test_id):
     candidate=session.get("candidate")
     test=get_test(test_id)
     if not candidate or candidate["test_id"]!=test_id or not test: return redirect(url_for("home"))
+    if not session.get("test_deadline"):
+        abort(403, "Test muddati tugagan yoki sessiya bekor qilingan.")
     try: key=json.loads(test["answer_key"] or "[]")
     except Exception: key=[]
     if not key: abort(400, "Javoblar kaliti mavjud emas.")
@@ -399,7 +419,7 @@ def certificate(cert_id):
     allowed=not (r["review_status"]=="pending" or int(r["focus_warning"] or 0)>=2)
     status="Haqiqiy sertifikat" if allowed else "O‘qituvchi tekshiruvi kutilmoqda"
     org=(r["certificate_org_name"] or r["teacher_full_name"] or "NEURON TEST BOT").strip()
-    return render_template_string("""<!doctype html><html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#10284b"><title>Sertifikatni tekshirish — NEURON</title><style>*{box-sizing:border-box}body{margin:0;padding:24px 14px;background:#081426;color:#edf4ff;font:16px/1.55 system-ui,Arial}.wrap{max-width:680px;margin:5vh auto;background:#10294b;border:1px solid #315477;border-radius:24px;padding:26px;box-shadow:0 20px 60px #0006}.tag{color:#9bc4ef;letter-spacing:2px;font-size:12px;font-weight:800}.state{padding:12px 16px;border-radius:12px;background:#123c37;color:#8df0ca;display:inline-block;font-weight:800}.name{font-size:30px;font-weight:800;margin:14px 0 4px}.muted{color:#9db2d0}.row{padding:13px 0;border-bottom:1px solid #ffffff18;display:flex;justify-content:space-between;gap:16px}.row b{text-align:right}.btn{display:block;margin-top:18px;padding:15px;border-radius:14px;text-align:center;text-decoration:none;color:white;background:linear-gradient(110deg,#0891b2,#4f46e5);font-weight:800}.brand{font-size:20px;font-weight:900;letter-spacing:2px;margin-bottom:18px}@media(max-width:440px){.wrap{padding:20px}.row{font-size:14px}.name{font-size:25px}}</style></head><body><main class="wrap"><div class="brand">NEURON<span style="color:#22d3ee">.</span><small style="display:block;font-size:10px;color:#9db2d0;letter-spacing:3px">SERTIFIKAT TEKSHIRUVI</small></div><p class="tag">RASMIY TEKSHIRUV SAHIFASI</p><div class="state">{{status}}</div><h1 class="name">{{r['full_name']}}</h1><p class="muted">{{org}}</p><div class="row"><span>Fan / test</span><b>{{r['title']}}</b></div><div class="row"><span>Natija</span><b>{{r['score']}} / {{r['total']}} ({{r['percent']}}%)</b></div><div class="row"><span>Sertifikat ID</span><b>{{r['cert_id']}}</b></div><div class="row"><span>Berilgan sana</span><b>{{r['created_at'][:10]}}</b></div>{% if allowed %}<a class="btn" href="{{url_for('certificate_image_route',cert_id=r['cert_id'])}}">Sertifikat rasmini ko‘rish / yuklab olish</a><a class="btn" href="{{url_for('certificate_pdf',cert_id=r['cert_id'])}}">PDF yuklab olish</a>{% endif %}<p class="muted" style="font-size:12px;margin-top:24px">Bu sahifa faqat sertifikatni tekshirish uchun. O‘qituvchi kabineti menyusi ko‘rsatilmaydi.</p></main></body></html>""",r=r,status=status,allowed=allowed,org=org)
+    return render_template_string("""<!doctype html><html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#10284b"><title>Sertifikatni tekshirish — NEURON</title><style>*{box-sizing:border-box}body{margin:0;padding:24px 14px;background:#081426;color:#edf4ff;font:16px/1.55 system-ui,Arial}.wrap{max-width:680px;margin:5vh auto;background:#10294b;border:1px solid #315477;border-radius:24px;padding:26px;box-shadow:0 20px 60px #0006}.tag{color:#9bc4ef;letter-spacing:2px;font-size:12px;font-weight:800}.state{padding:12px 16px;border-radius:12px;background:#123c37;color:#8df0ca;display:inline-block;font-weight:800}.name{font-size:30px;font-weight:800;margin:14px 0 4px}.muted{color:#9db2d0}.row{padding:13px 0;border-bottom:1px solid #ffffff18;display:flex;justify-content:space-between;gap:16px}.row b{text-align:right}.btn{display:block;margin-top:18px;padding:15px;border-radius:14px;text-align:center;text-decoration:none;color:white;background:linear-gradient(110deg,#0891b2,#4f46e5);font-weight:800}.brand{font-size:20px;font-weight:900;letter-spacing:2px;margin-bottom:18px}@media(max-width:440px){.wrap{padding:20px}.row{font-size:14px}.name{font-size:25px}}</style></head><body><main class="wrap"><div class="brand">NEURON<span style="color:#22d3ee">.</span><small style="display:block;font-size:10px;color:#9db2d0;letter-spacing:3px">SERTIFIKAT TEKSHIRUVI</small></div><p class="tag">RASMIY TEKSHIRUV SAHIFASI</p><div class="state">{{status}}</div><h1 class="name">{{r['full_name']}}</h1><p class="muted">{{org}}</p><div class="row"><span>Fan / test</span><b>{{r['title']}}</b></div><div class="row"><span>Natija</span><b>{{r['score']}} / {{r['total']}} ({{r['percent']}}%)</b></div><div class="row"><span>Sertifikat ID</span><b>{{r['cert_id']}}</b></div><div class="row"><span>Berilgan sana</span><b>{{r['created_at'][:10]}}</b></div>{% if r['focus_warning']|int>0 %}<div style="margin-top:16px;padding:14px;border-radius:12px;background:#4a3213;color:#ffe0a3;border:1px solid #a8792d">⚠️ Siz test davomida {{r['focus_warning']}} marta ogohlantirish oldingiz. Bu holat natijangizda qayd etilgan.</div>{% endif %}{% if allowed %}<a class="btn" href="{{url_for('certificate_image_route',cert_id=r['cert_id'])}}">Sertifikat rasmini ko‘rish / yuklab olish</a><a class="btn" href="{{url_for('certificate_pdf',cert_id=r['cert_id'])}}">PDF yuklab olish</a>{% endif %}<p class="muted" style="font-size:12px;margin-top:24px">Bu sahifa faqat sertifikatni tekshirish uchun. O‘qituvchi kabineti menyusi ko‘rsatilmaydi.</p></main></body></html>""",r=r,status=status,allowed=allowed,org=org)
 
 
 @app.get("/certificate/<cert_id>/pdf")
@@ -634,7 +654,7 @@ def teacher_cabinet():
     with db() as c:
         t=c.execute("SELECT * FROM teacher_accounts WHERE telegram_id=?",(session["teacher_id"],)).fetchone()
         rows=c.execute("SELECT results.*,tests.title,tests.code,tests.subject,tests.grade,tests.certificate_mode,tests.certificate_min_score,EXISTS(SELECT 1 FROM blocked_students b WHERE b.test_id=results.test_id AND b.full_name_key=lower(trim(results.full_name))) AS is_blocked FROM results JOIN tests ON tests.id=results.test_id WHERE tests.teacher_id=? ORDER BY results.id DESC LIMIT 100", (session["teacher_id"],)).fetchall()
-        tests=c.execute("SELECT * FROM tests WHERE teacher_id=? ORDER BY id DESC LIMIT 100",(session["teacher_id"],)).fetchall()
+        tests=c.execute("SELECT * FROM tests WHERE teacher_id=? AND is_active=TRUE ORDER BY id DESC LIMIT 100",(session["teacher_id"],)).fetchall()
     return page("O‘qituvchi kabineti", """<section class="panel-hero"><p class="eyebrow" style="color:#c7d7ff">NEURON V2 · TEACHER</p><h1>Assalomu alaykum, {{t['full_name']}}</h1><p class="muted">{{t['subject']}} · {{t['phone']}}</p><p class="muted">Kabinet bo‘limlarini pastdagi ilova menyusidan oching.</p></section>
 <div class="grid"><div class="stat"><b>{{tests|length}}</b>Yaratilgan testlar</div><div class="stat"><b>{{rows|length}}</b>O‘quvchilar</div><div class="stat"><b>{{rows|selectattr('review_status','equalto','pending')|list|length}}</b>Tekshiruv kutilmoqda</div></div>
 <section class="card teacher-screen active" id="create"><p class="eyebrow">TEST KONSTRUKTORI</p><h2>＋ Yangi test yaratish</h2><p class="muted">Fan va sinfni tanlang. Javoblar kalitini savol turi bo‘yicha belgilang — yopiq savollarni keyin o‘zingiz baholaysiz.</p>
@@ -642,7 +662,7 @@ def teacher_cabinet():
 <div class="question"><h3>🏅 Sertifikat berish tartibi</h3><label>Berish usuli</label><select name="certificate_mode"><option value="manual">Qo‘lda — o‘qituvchi tanlaydi</option><option value="threshold">Avtomatik — minimal ball bo‘yicha</option></select><label>Minimal ball</label><input name="certificate_min_score" type="number" min="0" step="0.5" value="7"><p class="muted">Avtomatik rejimda shu balldan kam bo‘lmagan natija olgan o‘quvchiga, tekshiruv tugagach, sertifikat yuboriladi.</p></div>
 <label>Savollar fayli (PDF yoki DOCX, 15 MB gacha)</label><div class="filebox">📎 <b>Test hujjatini tanlang</b><input type="file" name="test_file" accept=".pdf,.docx" required></div>
 <h3>EvalBee uslubidagi javoblar kaliti</h3><div class="key-help muted">🔵 Variantli · 🟢 To‘g‘ri/Noto‘g‘ri · ✍️ Qisqa javob · 📝 Yopiq savol — o‘qituvchi tekshiradi.</div><div id="teacherKeyRows"></div><input type="hidden" name="answer_key" id="teacherAnswerKey" required><p id="teacherKeyProgress" class="muted">0 ta javob belgilandi</p><button class="full">🚀 Testni yaratish</button></form></section>
-<section class="card teacher-screen" id="tests"><h2>📚 Mening testlarim</h2>{% for x in tests %}<div class="question"><b>{{x['title']}}</b><p class="muted">{{x['subject']}} · {{x['grade']}} · {{x['question_count']}} savol · {{x['duration']}} daqiqa</p><p class="eyebrow">TEST KODI</p><div class="stat"><b style="font-size:20px">{{x['code']}}</b></div><button type="button" class="secondary full" onclick="copyText(this,'{{x['code']}}')">📋 Kodni nusxalash</button></div>{% else %}<p class="muted">Hali test yaratmagansiz.</p>{% endfor %}</section>
+<section class="card teacher-screen" id="tests"><h2>📚 Mening testlarim</h2>{% for x in tests %}<div class="question"><b>{{x['title']}}</b><p class="muted">{{x['subject']}} · {{x['grade']}} · {{x['question_count']}} savol · {{x['duration']}} daqiqa</p><p class="eyebrow">TEST KODI</p><div class="stat"><b style="font-size:20px">{{x['code']}}</b></div><button type="button" class="secondary full" onclick="copyText(this,'{{x['code']}}')">📋 Kodni nusxalash</button><form method="post" action="/teacher/test/{{x['id']}}/delete" onsubmit="return confirm('Testni yopib, faol ro‘yxatdan olib tashlaysizmi? Eski natijalar saqlanadi.')"><button class="secondary full" style="color:#fca5a5">🗑 Testni o‘chirish</button></form></div>{% else %}<p class="muted">Hali test yaratmagansiz.</p>{% endfor %}</section>
 <section class="card teacher-screen" id="results"><h2>📊 O‘quvchilar natijalari</h2>{% for r in rows %}<div class="question {% if r['focus_warning']|int>0 %}warning-card{% endif %}"><b>{{r['full_name']}}</b> — {{r['title']}}<p class="muted">{{r['score']}} / {{r['total']}} · {{r['percent']}}% · {{r['created_at']}}</p>{% if r['focus_warning']|int>0 %}<p><span class="status-pill">⚠️ {{r['focus_warning']}} ta ogohlantirish</span> <b>{{r['full_name']}}</b></p>{% endif %}{% if r['review_status']=='pending' %}<p><span class="status-pill">Yopiq savollar tekshirilmoqda</span></p><a class="btn secondary full" href="/teacher/review/{{r['id']}}">📝 Yopiq savollarni tekshirish</a>{% else %}<span class="status-pill good">✓ Baholash yakunlangan</span>{% endif %}{% if r['review_status']!='pending' and r['focus_warning']|int<2 and not r['certificate_approved'] %}<form method="post" action="/teacher/certificate/{{r['id']}}"><button class="full">🏅 Sertifikat berish va Telegramga yuborish</button></form>{% elif r['certificate_approved'] %}<span class="status-pill good">🏅 Sertifikat berishga ruxsat berilgan</span>{% endif %}<a class="btn full" href="/certificate/{{r['cert_id']}}">🏅 Natija va sertifikat</a></div>{% else %}<p class="muted">Hozircha natija yo‘q.</p>{% endfor %}</section>
 <section class="card teacher-screen" id="warnings"><h2>⚠️ Ogohlantirish olgan o‘quvchilar</h2><p class="muted">Bu bo‘limda test oynasidan chiqqan o‘quvchilarni ko‘rasiz. Bloklash shu test uchun o‘quvchi ismi bo‘yicha ishlaydi.</p>{% for r in rows if r['focus_warning']|int>0 %}<div class="question warning-card"><b>{{r['full_name']}}</b><p class="muted">{{r['title']}} · {{r['focus_warning']}} ta ogohlantirish · {{r['created_at']}}</p>{% if r['is_blocked'] %}<span class="status-pill">🚫 Bloklangan</span><form method="post" action="/teacher/block/{{r['id']}}"><button class="secondary full">Blokdan chiqarish</button></form>{% else %}<span class="status-pill">⚠️ Nazoratda</span><form method="post" action="/teacher/block/{{r['id']}}"><button class="full">🚫 Shu testdan bloklash</button></form>{% endif %}</div>{% else %}<p class="muted">Ogohlantirish olgan o‘quvchilar yo‘q.</p>{% endfor %}</section><section class="card teacher-screen" id="certificates"><h2>🏅 Sertifikat ko‘rinishi</h2><p class="muted">Sertifikat namunasi va o‘quvchilar olgan sertifikatlar shu bo‘limda ko‘rinadi.</p><div class="cert-preview"><div class="eyebrow">NEURON</div><h2 style="color:#315efb;margin:4px 0">SERTIFIKAT</h2><div>Ushbu sertifikat taqdim etiladi</div><div class="cert-name">O‘quvchi F.I.Sh.</div><div class="muted">“Test nomi” test sinovi natijasi</div><h2>20.0 / 20 &nbsp; | &nbsp; 100%</h2><p class="muted">Sertifikat ID: NR-XXXXXXXX</p><p class="muted">Sana: YYYY-MM-DD</p></div>{% for r in rows %}<div class="cert-preview"><div class="eyebrow">NEURON EDUCATION</div><h2 style="color:#315efb;margin:8px 0">SERTIFIKAT</h2><div>Ushbu sertifikat taqdim etiladi</div><div class="cert-name">{{r['full_name']}}</div><div class="muted">{{r['title']}}</div><h2>{{'%.1f'|format(r['score']|float)}} / {{r['total']}} &nbsp; | &nbsp; {{r['percent']}}%</h2><p class="muted">Sertifikat ID: {{r['cert_id']}}</p><p class="muted">Sana: {{r['created_at'][:10]}}</p>{% if r['review_status']=='pending' or r['focus_warning']|int>=2 %}<span class="status-pill">Tekshiruv / cheklov mavjud</span>{% else %}<span class="status-pill good">Sertifikat tayyor</span><a class="btn secondary full" href="/certificate/{{r['cert_id']}}/pdf">PDF sertifikatni ko‘rish</a>{% endif %}</div>{% else %}<p class="muted">Sertifikatlar natija kelgach shu yerda ko‘rinadi.</p>{% endfor %}</section>
 <a class="btn dark full" href="/teacher/logout">Chiqish</a><script>
@@ -650,6 +670,16 @@ def teacher_cabinet():
 function sync(){const rows=[...box.querySelectorAll('.teacher-key-row')];const vals=rows.map(r=>{const type=r.querySelector('select').value;if(type==='manual')return 'MANUAL';if(type==='short')return r.querySelector('.short-answer').value.trim();return r.querySelector('input:checked')?.value||'';});const done=vals.filter(Boolean).length;hidden.value=vals.join(',');progress.textContent=done+' / '+rows.length+' ta javob belgilandi';hidden.setCustomValidity(done===rows.length&&vals.every(Boolean)?'':'Har bir savol turini tanlab, javobini belgilang.');}
 function draw(){const n=Math.max(1,Math.min(100,Number(count.value)||1));box.innerHTML='';for(let i=1;i<=n;i++){const r=document.createElement('div');r.className='question teacher-key-row';r.innerHTML='<b>'+i+'-savol</b><select aria-label="'+i+'-savol turi"><option value="mcq">Variantli — A / B / C / D</option><option value="tf">To‘g‘ri / Noto‘g‘ri</option><option value="short">Qisqa javob — avtomatik</option><option value="manual">Yopiq savol — o‘qituvchi tekshiradi</option></select><div class="bubbles"></div><input class="short-answer" maxlength="80" placeholder="To‘g‘ri javob matni" style="display:none"><p class="muted key-type-hint"></p>';const sel=r.querySelector('select'),b=r.querySelector('.bubbles'),short=r.querySelector('.short-answer'),hint=r.querySelector('.key-type-hint');function options(){b.innerHTML='';short.style.display=sel.value==='short'?'block':'none';hint.textContent=sel.value==='manual'?'O‘quvchi javob yozadi. Yakuniy ballni kabinetda siz qo‘yasiz.':sel.value==='short'?'O‘quvchi yozgan javob kalit bilan avtomatik solishtiriladi.':'To‘g‘ri javob variantini belgilang.';const values=sel.value==='mcq'?['A','B','C','D']:sel.value==='tf'?['TRUE','FALSE']:[];values.forEach(v=>{const l=document.createElement('label');l.className='bubble';l.innerHTML='<input type="radio" name="teacher_key_'+i+'" value="'+v+'"><span>'+(v==='TRUE'?'T':v==='FALSE'?'N':v)+'</span>';b.appendChild(l);});sync();}sel.addEventListener('change',options);r.addEventListener('change',sync);short.addEventListener('input',sync);options();box.appendChild(r);}sync();}
 count.addEventListener('input',draw);draw();})();</script></section>""",t=t,rows=rows,tests=tests)
+
+@app.post("/teacher/test/<int:test_id>/delete")
+@teacher_required
+def teacher_delete_test(test_id):
+    with db() as c:
+        test=c.execute("SELECT id,title FROM tests WHERE id=? AND teacher_id=?",(test_id,session["teacher_id"])).fetchone()
+        if not test: abort(404)
+        c.execute("UPDATE tests SET is_active=FALSE WHERE id=? AND teacher_id=?",(test_id,session["teacher_id"]))
+    flash("Test yopildi va faol testlar ro‘yxatidan olib tashlandi. Eski natijalar saqlab qolindi.")
+    return redirect(url_for("teacher_cabinet")+"#tests")
 
 @app.post("/teacher/create")
 @teacher_required
